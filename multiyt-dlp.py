@@ -75,57 +75,35 @@ def find_yt_dlp():
         
     return None
 
-def download_yt_dlp(window):
-    """Downloads the appropriate yt-dlp binary for the current OS."""
+def _download_yt_dlp_thread(gui_queue):
+    """Worker thread for downloading yt-dlp."""
     platform = sys.platform
     if platform not in YT_DLP_URLS:
-        messagebox.showerror("Unsupported OS", f"Your OS ({platform}) is not supported for automatic download.")
-        return None
-
-    url = YT_DLP_URLS[platform]
-    filename = os.path.basename(url)
-    
-    if platform == 'darwin' and filename == 'yt-dlp_macos':
-        save_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'yt-dlp')
-    else:
-        save_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), filename)
-
-    permission = messagebox.askyesno(
-        "yt-dlp Not Found",
-        "yt-dlp executable not found in your system PATH or script directory.\n\n"
-        "Do you want to download the latest version automatically?"
-    )
-
-    if not permission:
-        return None
+        gui_queue.put(('dependency_done', {'type': 'yt-dlp', 'success': False, 'error': f"Unsupported OS: {platform}"}))
+        return
 
     try:
-        progress_win = tk.Toplevel(window)
-        progress_win.title("Downloading yt-dlp")
-        progress_win.geometry("300x80")
-        progress_win.resizable(False, False)
-        tk.Label(progress_win, text="Downloading yt-dlp...", pady=10).pack()
-        progress_bar = ttk.Progressbar(progress_win, orient='horizontal', length=280, mode='indeterminate')
-        progress_bar.pack()
-        progress_bar.start(10)
-        window.update_idletasks()
+        gui_queue.put(('dependency_progress', {'type': 'yt-dlp', 'status': 'indeterminate', 'text': 'Downloading yt-dlp...'}))
+        
+        url = YT_DLP_URLS[platform]
+        filename = os.path.basename(url)
+        
+        if platform == 'darwin' and filename == 'yt-dlp_macos':
+            save_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'yt-dlp')
+        else:
+            save_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), filename)
 
-        response = urllib.request.urlopen(url)
-        with open(save_path, 'wb') as f:
-            f.write(response.read())
-
-        progress_bar.stop()
-        progress_win.destroy()
+        with urllib.request.urlopen(url) as response:
+            with open(save_path, 'wb') as f:
+                f.write(response.read())
 
         if platform in ['linux', 'darwin']:
             os.chmod(save_path, 0o755)
 
-        messagebox.showinfo("Success", f"yt-dlp downloaded successfully to:\n{save_path}")
-        return save_path
+        gui_queue.put(('dependency_done', {'type': 'yt-dlp', 'success': True, 'path': save_path}))
 
     except Exception as e:
-        messagebox.showerror("Download Failed", f"Failed to download yt-dlp: {e}")
-        return None
+        gui_queue.put(('dependency_done', {'type': 'yt-dlp', 'success': False, 'error': str(e)}))
 
 def find_ffmpeg():
     """Finds ffmpeg in PATH or in the script's directory."""
@@ -140,49 +118,46 @@ def find_ffmpeg():
         
     return None
 
-def download_ffmpeg(window):
-    """Downloads and extracts the appropriate FFmpeg binary for the current OS."""
+def _download_ffmpeg_thread(gui_queue):
+    """Worker thread for downloading and extracting FFmpeg."""
     platform = sys.platform
     if platform not in FFMPEG_URLS:
-        messagebox.showerror("Unsupported OS", f"Your OS ({platform}) is not supported for automatic FFmpeg download.")
-        return None
+        gui_queue.put(('dependency_done', {'type': 'ffmpeg', 'success': False, 'error': f"Unsupported OS for FFmpeg: {platform}"}))
+        return
 
-    permission = messagebox.askyesno(
-        "FFmpeg Not Found",
-        "FFmpeg is required for the selected download format (e.g., merging video/audio or audio conversion) but was not found.\n\n"
-        "Do you want to download it automatically? (This may be a large download)"
-    )
-    if not permission:
-        return None
-
-    url = FFMPEG_URLS[platform]
     script_dir = os.path.dirname(os.path.abspath(__file__))
+    url = FFMPEG_URLS[platform]
     archive_filename = os.path.basename(url)
     archive_path = os.path.join(script_dir, archive_filename)
     extract_dir = os.path.join(script_dir, "ffmpeg_temp")
-    
     final_ffmpeg_name = 'ffmpeg.exe' if platform == 'win32' else 'ffmpeg'
     final_ffmpeg_path = os.path.join(script_dir, final_ffmpeg_name)
 
-    progress_win = tk.Toplevel(window)
-    progress_win.title("Downloading FFmpeg")
-    progress_win.geometry("350x100")
-    progress_win.resizable(False, False)
-    label = tk.Label(progress_win, text="Downloading FFmpeg archive...", pady=10)
-    label.pack()
-    progress_bar = ttk.Progressbar(progress_win, orient='horizontal', length=320, mode='indeterminate')
-    progress_bar.pack()
-    progress_bar.start(10)
-    window.update_idletasks()
-
     try:
-        # 1. Download
-        with urllib.request.urlopen(url) as response, open(archive_path, 'wb') as f_out:
-            shutil.copyfileobj(response, f_out)
-        
+        # 1. Download with progress
+        gui_queue.put(('dependency_progress', {'type': 'ffmpeg', 'status': 'determinate', 'text': 'Preparing download...', 'value': 0}))
+        with urllib.request.urlopen(url) as response:
+            total_size = int(response.getheader('Content-Length', 0))
+            chunk_size = 8192
+            bytes_downloaded = 0
+            with open(archive_path, 'wb') as f_out:
+                while True:
+                    chunk = response.read(chunk_size)
+                    if not chunk:
+                        break
+                    f_out.write(chunk)
+                    bytes_downloaded += len(chunk)
+                    if total_size > 0:
+                        progress_percent = (bytes_downloaded / total_size) * 100
+                        gui_queue.put(('dependency_progress', {
+                            'type': 'ffmpeg', 
+                            'status': 'determinate', 
+                            'text': f'Downloading... {bytes_downloaded/1024/1024:.1f}/{total_size/1024/1024:.1f} MB', 
+                            'value': progress_percent
+                        }))
+
         # 2. Extract
-        label.config(text="Extracting FFmpeg...")
-        window.update_idletasks()
+        gui_queue.put(('dependency_progress', {'type': 'ffmpeg', 'status': 'indeterminate', 'text': 'Extracting FFmpeg...'}))
         if os.path.exists(extract_dir):
             shutil.rmtree(extract_dir)
         os.makedirs(extract_dir)
@@ -194,10 +169,8 @@ def download_ffmpeg(window):
             with tarfile.open(archive_path, 'r:xz') as tar_ref:
                 tar_ref.extractall(path=extract_dir)
         
-        # 3. Find and Move the ffmpeg executable
-        label.config(text="Locating executable...")
-        window.update_idletasks()
-        
+        # 3. Find and Move
+        gui_queue.put(('dependency_progress', {'type': 'ffmpeg', 'status': 'indeterminate', 'text': 'Locating executable...'}))
         ffmpeg_executable_path = None
         for root, _, files in os.walk(extract_dir):
             if final_ffmpeg_name in files:
@@ -209,20 +182,15 @@ def download_ffmpeg(window):
 
         shutil.move(ffmpeg_executable_path, final_ffmpeg_path)
 
-        # 4. Set permissions for Linux/macOS
         if platform in ['linux', 'darwin']:
             os.chmod(final_ffmpeg_path, 0o755)
 
-        messagebox.showinfo("Success", f"FFmpeg downloaded successfully to:\n{final_ffmpeg_path}")
-        return final_ffmpeg_path
+        gui_queue.put(('dependency_done', {'type': 'ffmpeg', 'success': True, 'path': final_ffmpeg_path}))
 
     except Exception as e:
-        messagebox.showerror("FFmpeg Download Failed", f"An error occurred: {e}")
-        return None
+        gui_queue.put(('dependency_done', {'type': 'ffmpeg', 'success': False, 'error': str(e)}))
     finally:
-        # 5. Cleanup
-        progress_bar.stop()
-        progress_win.destroy()
+        # 4. Cleanup
         if os.path.exists(archive_path):
             os.remove(archive_path)
         if os.path.exists(extract_dir):
@@ -240,15 +208,6 @@ class YTDlpDownloaderApp:
         self.config = load_config()
         self.max_concurrent_downloads = self.config.get('max_concurrent_downloads', 4)
         
-        self.yt_dlp_path = find_yt_dlp()
-        if not self.yt_dlp_path:
-            self.yt_dlp_path = download_yt_dlp(self.root)
-        
-        if not self.yt_dlp_path:
-            messagebox.showerror("Critical Error", "yt-dlp is required to run this application. Exiting.")
-            self.root.destroy()
-            return
-
         # Concurrency and state management
         self.job_queue = queue.Queue()
         self.gui_queue = queue.Queue()
@@ -257,15 +216,36 @@ class YTDlpDownloaderApp:
         self.completed_jobs = 0
         self.total_jobs = 0
         self.stats_lock = threading.Lock()
+        self.dependency_progress_win = None
+        self.ffmpeg_path = None
+        self.yt_dlp_path = None
 
         self.create_widgets()
+
+        self.yt_dlp_path = find_yt_dlp()
+        if not self.yt_dlp_path:
+            self.initiate_dependency_download('yt-dlp')
+        
+        self.ffmpeg_path = find_ffmpeg()
+
         self.process_gui_queue()
         
         # Save settings on exit
         self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
 
     def on_closing(self):
-        """Handle saving the configuration and closing the application."""
+        """Handle saving the configuration and closing the application gracefully."""
+        # Check if there are any active or queued jobs
+        if self.total_jobs > self.completed_jobs:
+            # If so, ask for user confirmation
+            if not messagebox.askyesno(
+                "Confirm Exit",
+                "Downloads are in progress. Are you sure you want to exit?\n\n"
+                "Active downloads will be stopped and any remaining queued items will be lost."
+            ):
+                return  # User clicked "No", so we abort the closing process
+
+        # If no jobs are running, or if the user confirmed the exit, proceed to shut down
         self.config['preferred_format'] = self.format_var.get()
         self.config['max_concurrent_downloads'] = self.max_concurrent_downloads
         self.config['last_output_path'] = self.output_path_var.get()
@@ -288,16 +268,16 @@ class YTDlpDownloaderApp:
         self.output_path_var = tk.StringVar(value=self.config.get('last_output_path', os.getcwd()))
         output_entry = ttk.Entry(input_frame, textvariable=self.output_path_var, state='readonly')
         output_entry.grid(row=1, column=1, padx=5, pady=5, sticky=tk.EW)
-        browse_btn = ttk.Button(input_frame, text="Browse...", command=self.browse_output_path)
-        browse_btn.grid(row=1, column=2, padx=5, pady=5)
+        self.browse_button = ttk.Button(input_frame, text="Browse...", command=self.browse_output_path)
+        self.browse_button.grid(row=1, column=2, padx=5, pady=5)
 
-        options_frame = ttk.LabelFrame(main_frame, text="Options", padding="10")
-        options_frame.pack(fill=tk.X, pady=5)
+        self.options_frame = ttk.LabelFrame(main_frame, text="Options", padding="10")
+        self.options_frame.pack(fill=tk.X, pady=5)
         
         self.format_var = tk.StringVar(value=self.config.get('preferred_format', 'video'))
-        ttk.Radiobutton(options_frame, text="Video (Best Quality)", variable=self.format_var, value="video").pack(side=tk.LEFT, padx=10)
-        ttk.Radiobutton(options_frame, text="Audio Only (Best Quality)", variable=self.format_var, value="audio_best").pack(side=tk.LEFT, padx=10)
-        ttk.Radiobutton(options_frame, text="Audio Only (MP3, 192k)", variable=self.format_var, value="audio_mp3").pack(side=tk.LEFT, padx=10)
+        ttk.Radiobutton(self.options_frame, text="Video (Best Quality)", variable=self.format_var, value="video").pack(side=tk.LEFT, padx=10)
+        ttk.Radiobutton(self.options_frame, text="Audio Only (Best Quality)", variable=self.format_var, value="audio_best").pack(side=tk.LEFT, padx=10)
+        ttk.Radiobutton(self.options_frame, text="Audio Only (MP3, 192k)", variable=self.format_var, value="audio_mp3").pack(side=tk.LEFT, padx=10)
         
         action_frame = ttk.Frame(main_frame)
         action_frame.pack(fill=tk.X, pady=10)
@@ -342,6 +322,80 @@ class YTDlpDownloaderApp:
         
         ttk.Label(main_frame, text="Note: FFmpeg must be installed and in your PATH for best results (especially for audio conversion).", font=("TkDefaultFont", 8)).pack(pady=5)
 
+    def initiate_dependency_download(self, dep_type):
+        if dep_type == 'yt-dlp':
+            permission = messagebox.askyesno(
+                "yt-dlp Not Found",
+                "yt-dlp executable not found in your system PATH or script directory.\n\n"
+                "Do you want to download the latest version automatically?"
+            )
+            if not permission:
+                messagebox.showerror("Critical Error", "yt-dlp is required to run this application. Exiting.")
+                self.root.destroy()
+                return
+            
+            self.toggle_ui_state(False)
+            self.show_dependency_progress_window("Downloading yt-dlp")
+            threading.Thread(target=_download_yt_dlp_thread, args=(self.gui_queue,), daemon=True).start()
+        
+        elif dep_type == 'ffmpeg':
+            permission = messagebox.askyesno(
+                "FFmpeg Not Found",
+                "FFmpeg is required for the selected download format but was not found.\n\n"
+                "Do you want to download it automatically? (This may be a large download)"
+            )
+            if not permission:
+                return
+            
+            self.toggle_ui_state(False)
+            self.show_dependency_progress_window("Downloading FFmpeg")
+            threading.Thread(target=_download_ffmpeg_thread, args=(self.gui_queue,), daemon=True).start()
+
+    def toggle_ui_state(self, enabled):
+        state = 'normal' if enabled else 'disabled'
+        self.url_text.config(state=state)
+        self.browse_button.config(state=state)
+        self.download_button.config(state=state)
+        for child in self.options_frame.winfo_children():
+            if isinstance(child, ttk.Radiobutton):
+                child.config(state=state)
+
+    def show_dependency_progress_window(self, title):
+        if self.dependency_progress_win and self.dependency_progress_win.winfo_exists():
+            return
+        
+        self.dependency_progress_win = tk.Toplevel(self.root)
+        self.dependency_progress_win.title(title)
+        self.dependency_progress_win.geometry("400x120")
+        self.dependency_progress_win.resizable(False, False)
+        self.dependency_progress_win.transient(self.root)
+        self.dependency_progress_win.protocol("WM_DELETE_WINDOW", lambda: None) # Prevent closing
+
+        self.dep_progress_label = tk.Label(self.dependency_progress_win, text="Initializing...", pady=10)
+        self.dep_progress_label.pack(fill=tk.X, padx=10)
+        self.dep_progress_bar = ttk.Progressbar(self.dependency_progress_win, orient='horizontal', length=380)
+        self.dep_progress_bar.pack(pady=10)
+    
+    def update_dependency_progress(self, data):
+        if not self.dependency_progress_win or not self.dependency_progress_win.winfo_exists():
+            self.show_dependency_progress_window(f"Downloading {data.get('type')}")
+
+        self.dep_progress_label.config(text=data.get('text', ''))
+        
+        if data.get('status') == 'indeterminate':
+            self.dep_progress_bar.config(mode='indeterminate')
+            self.dep_progress_bar.start(10)
+        elif data.get('status') == 'determinate':
+            self.dep_progress_bar.stop()
+            self.dep_progress_bar.config(mode='determinate')
+            self.dep_progress_bar['value'] = data.get('value', 0)
+    
+    def close_dependency_progress_window(self):
+        if self.dependency_progress_win:
+            self.dep_progress_bar.stop()
+            self.dependency_progress_win.destroy()
+            self.dependency_progress_win = None
+
     def open_settings_window(self):
         settings_win = tk.Toplevel(self.root)
         settings_win.title("Settings")
@@ -376,7 +430,6 @@ class YTDlpDownloaderApp:
         
         settings_win.protocol("WM_DELETE_WINDOW", apply_and_close)
 
-
     def browse_output_path(self):
         path = filedialog.askdirectory(initialdir=self.output_path_var.get())
         if path:
@@ -389,20 +442,20 @@ class YTDlpDownloaderApp:
         self.log_text.config(state='disabled')
 
     def queue_downloads(self):
+        if self.download_button['state'] == 'disabled' or not self.yt_dlp_path:
+            return
+
         urls_raw = self.url_text.get(1.0, tk.END).strip()
         if not urls_raw:
             messagebox.showwarning("Input Error", "Please enter at least one URL.")
             return
         
-        # Check for FFmpeg if the selected format requires it
         download_format = self.format_var.get()
         if download_format in ['video', 'audio_best', 'audio_mp3']:
-            ffmpeg_path = find_ffmpeg()
-            if not ffmpeg_path:
-                ffmpeg_path = download_ffmpeg(self.root)
-            
-            if not ffmpeg_path:
-                messagebox.showerror("Dependency Error", "FFmpeg is required for the selected format but is not available. Aborting.")
+            if not self.ffmpeg_path:
+                self.ffmpeg_path = find_ffmpeg()
+            if not self.ffmpeg_path:
+                self.initiate_dependency_download('ffmpeg')
                 return
 
         urls = [url for url in urls_raw.split('\n') if url.strip()]
@@ -420,7 +473,6 @@ class YTDlpDownloaderApp:
         for url in urls:
             self.gui_queue.put(('log', f"Processing URL: {url}"))
             try:
-                # --- FIX 1: Changed command to get canonical URLs instead of direct stream URLs ---
                 command = [self.yt_dlp_path, '--flat-playlist', '--print', '%(webpage_url)s', url]
                 
                 process = subprocess.Popen(
@@ -468,19 +520,23 @@ class YTDlpDownloaderApp:
     def worker_thread(self):
         while True:
             try:
-                job_id, url, output_path, download_format = self.job_queue.get(timeout=1) # Add timeout to allow thread to exit gracefully if needed
+                job_id, url, output_path, download_format = self.job_queue.get(timeout=1)
                 self.gui_queue.put(('update_job', (job_id, 'status', 'Downloading')))
                 self.run_download_process(job_id, url, output_path, download_format)
                 self.job_queue.task_done()
             except queue.Empty:
-                # If the queue is empty, the worker can exit. This is a simple exit strategy.
                 break
 
     def run_download_process(self, job_id, url, output_path, download_format):
         try:
+            # Define a robust, machine-readable progress template
+            progress_template = 'PROGRESS::%(progress.percentage)s'
+            
             command = [
-                self.yt_dlp_path, '--progress', '--no-mtime',
-                # --- FIX 2: Added .100s to truncate title and prevent overly long filenames ---
+                self.yt_dlp_path,
+                '--no-progress',  # Suppress the default visual progress bar
+                '--progress-template', progress_template,  # Use our custom template
+                '--no-mtime',
                 '-o', f'{output_path}/%(title).100s [%(id)s].%(ext)s'
             ]
 
@@ -502,11 +558,17 @@ class YTDlpDownloaderApp:
             for line in iter(process.stdout.readline, ''):
                 clean_line = line.strip()
                 self.gui_queue.put(('log', f"[{job_id}] {clean_line}"))
-                progress_match = re.search(r'\[download\]\s+(\d+\.?\d+)%', line)
-                if progress_match:
-                    percentage = float(progress_match.group(1))
-                    self.gui_queue.put(('update_job', (job_id, 'progress', f"{percentage:.1f}%")))
-            
+                
+                # Parse the custom progress template instead of using regex
+                if clean_line.startswith('PROGRESS::'):
+                    try:
+                        # Extract percentage from "PROGRESS:: 45.6"
+                        percentage_str = clean_line.split('::', 1)[1].strip()
+                        percentage = float(percentage_str)
+                        self.gui_queue.put(('update_job', (job_id, 'progress', f"{percentage:.1f}%")))
+                    except (IndexError, ValueError) as e:
+                        self.gui_queue.put(('log', f"[{job_id}] Could not parse progress line: '{clean_line}', error: {e}"))
+
             process.stdout.close()
             return_code = process.wait()
 
@@ -552,6 +614,27 @@ class YTDlpDownloaderApp:
                             self.downloads_tree.item(job_id, tags=('failed',))
                         self.downloads_tree.set(job_id, 'status', status)
                     self.update_overall_progress()
+
+                elif message_type == 'dependency_progress':
+                    self.update_dependency_progress(value)
+
+                elif message_type == 'dependency_done':
+                    self.close_dependency_progress_window()
+                    self.toggle_ui_state(True)
+                    
+                    dep_type = value.get('type')
+                    if value.get('success'):
+                        path = value.get('path')
+                        if dep_type == 'yt-dlp':
+                            self.yt_dlp_path = path
+                        elif dep_type == 'ffmpeg':
+                            self.ffmpeg_path = path
+                        messagebox.showinfo("Success", f"{dep_type.upper()} downloaded successfully to:\n{path}")
+                    else:
+                        error_msg = value.get('error')
+                        messagebox.showerror(f"{dep_type.upper()} Download Failed", f"An error occurred: {error_msg}")
+                        if dep_type == 'yt-dlp':
+                            self.root.destroy()
         
         except queue.Empty:
             self.root.after(100, self.process_gui_queue)
