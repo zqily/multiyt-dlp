@@ -576,6 +576,7 @@ class YTDlpDownloaderApp:
         self.is_downloading = False
         self.is_updating_dependency = False
         self.yt_dlp_version_var = tk.StringVar(value="Checking...")
+        self.is_destroyed = False
         
         # Core components.
         self.dep_manager = DependencyManager(self.gui_queue)
@@ -615,6 +616,7 @@ class YTDlpDownloaderApp:
         self.config['last_output_path'] = self.output_path_var.get()
         
         save_config(self.config)
+        self.is_destroyed = True 
         self.root.destroy()
 
     def create_widgets(self):
@@ -754,7 +756,10 @@ class YTDlpDownloaderApp:
                 self.dep_manager.install_or_update_yt_dlp()
             else:
                 messagebox.showerror("Critical Error", "yt-dlp is required. Exiting.")
-                self.root.destroy()
+                self.is_destroyed = True 
+                # Defer the destroy call until after the __init__ method completes.
+                # This prevents the TclError when trying to set the protocol on a destroyed window.
+                self.root.after(1, self.root.destroy)
         
         elif dep_type == 'ffmpeg':
             if messagebox.askyesno(
@@ -863,8 +868,9 @@ class YTDlpDownloaderApp:
                     self.handle_dependency_result(value)
 
         except queue.Empty:
-            # Check again after a short delay.
-            self.root.after(100, self.process_gui_queue)
+            # Check if the window is destroyed before scheduling the next check.
+            if not self.is_destroyed:
+                self.root.after(100, self.process_gui_queue)
 
     def handle_dependency_result(self, result):
         """Processes the result of a dependency download."""
@@ -880,6 +886,7 @@ class YTDlpDownloaderApp:
             messagebox.showerror(f"{dep_type.upper()} Download Failed", f"An error occurred: {error_msg}")
             # Exit if the critical dependency (yt-dlp) failed on initial install.
             if dep_type == 'yt-dlp' and not self.dep_manager.yt_dlp_path:
+                self.is_destroyed = True # Safety set before destroy
                 self.root.destroy()
         
         if self.is_updating_dependency:
