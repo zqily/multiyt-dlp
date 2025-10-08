@@ -8,9 +8,22 @@ import threading
 import queue
 import subprocess
 import urllib.request
+import urllib.error
 import zipfile
 import tarfile
 import json
+import uuid
+
+# --- Application Path Setup ---
+# Determines the correct base path for data files, whether running as a script
+# or as a frozen executable packaged by PyInstaller.
+if getattr(sys, 'frozen', False):
+    # For a frozen app, the base path is the directory of the executable.
+    APP_PATH = os.path.dirname(sys.executable)
+else:
+    # For a script, it's the directory containing the script.
+    APP_PATH = os.path.dirname(os.path.abspath(__file__))
+
 
 # --- Helper Function for PyInstaller ---
 def resource_path(relative_path):
@@ -19,7 +32,8 @@ def resource_path(relative_path):
         # PyInstaller creates a temp folder and stores path in _MEIPASS
         base_path = sys._MEIPASS
     except Exception:
-        base_path = os.path.abspath(".")
+        # For development or one-dir builds, resources are relative to the app path.
+        base_path = APP_PATH
 
     return os.path.join(base_path, relative_path)
 
@@ -38,8 +52,16 @@ FFMPEG_URLS = {
     'darwin': 'https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-macos64-gpl.zip'
 }
 
-# Configuration file name.
-CONFIG_FILE = 'config.json'
+# A standard User-Agent to prevent blocking by services like GitHub.
+# Using a common browser user agent is generally robust.
+REQUEST_HEADERS = {
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+}
+# A reasonable timeout for network requests in seconds.
+URL_TIMEOUT = 30
+
+# Configuration file path, relative to the application's directory.
+CONFIG_FILE = os.path.join(APP_PATH, 'config.json')
 
 # --- Configuration Management ---
 
@@ -49,6 +71,7 @@ def load_config():
     
     Provides robust defaults if the file is missing, corrupt,
     or is missing keys, ensuring the application can always start.
+    Also sanitizes loaded values to prevent security issues.
     """
     defaults = {
         'download_type': 'video',
@@ -67,6 +90,18 @@ def load_config():
             # Ensure all default keys exist in the loaded config for forward compatibility.
             for key, value in defaults.items():
                 config.setdefault(key, value)
+
+            # Sanitize the loaded filename template to prevent path traversal.
+            loaded_template = config.get('filename_template', '')
+            is_invalid_template = (
+                '/' in loaded_template or
+                '\\' in loaded_template or
+                os.path.isabs(loaded_template)
+            )
+            if is_invalid_template:
+                print(f"Warning: Invalid filename_template found in config.json. Reverting to default.")
+                config['filename_template'] = defaults['filename_template']
+
             return config
     except (json.JSONDecodeError, IOError):
         return defaults
@@ -89,12 +124,12 @@ class DependencyManager:
         self.ffmpeg_path = None
 
     def find_yt_dlp(self):
-        """Locates the yt-dlp executable, checking the system PATH first, then the script's directory."""
+        """Locates the yt-dlp executable, checking the system PATH first, then the app's directory."""
         self.yt_dlp_path = self._find_executable('yt-dlp')
         return self.yt_dlp_path
     
     def find_ffmpeg(self):
-        """Locates the ffmpeg executable, checking the system PATH first, then the script's directory."""
+        """Locates the ffmpeg executable, checking the system PATH first, then the app's directory."""
         self.ffmpeg_path = self._find_executable('ffmpeg')
         return self.ffmpeg_path
 
@@ -103,16 +138,15 @@ class DependencyManager:
         Helper to find an executable by name.
         
         Checks the system's PATH environment variable first, which is the preferred
-        location. If not found, it checks the local directory where the script is running.
+        location. If not found, it checks the local directory where the application is located.
         """
         # Check system PATH for the executable.
         path = shutil.which(name)
         if path:
             return path
         
-        # If not in PATH, check the script's local directory.
-        script_dir = os.path.dirname(os.path.abspath(__file__))
-        local_path = os.path.join(script_dir, f'{name}.exe' if sys.platform == 'win32' else name)
+        # If not in PATH, check the application's local directory.
+        local_path = os.path.join(APP_PATH, f'{name}.exe' if sys.platform == 'win32' else name)
         if os.path.exists(local_path):
             return local_path
             
@@ -152,11 +186,12 @@ class DependencyManager:
             
             # Standardize macOS executable name to 'yt-dlp' for consistency.
             if platform == 'darwin' and filename == 'yt-dlp_macos':
-                save_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'yt-dlp')
+                save_path = os.path.join(APP_PATH, 'yt-dlp')
             else:
-                save_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), filename)
+                save_path = os.path.join(APP_PATH, filename)
 
-            with urllib.request.urlopen(url) as response:
+            req = urllib.request.Request(url, headers=REQUEST_HEADERS)
+            with urllib.request.urlopen(req, timeout=URL_TIMEOUT) as response:
                 total_size = int(response.getheader('Content-Length', 0))
                 chunk_size = 8192
                 bytes_downloaded = 0
@@ -182,6 +217,10 @@ class DependencyManager:
             self.yt_dlp_path = save_path
             self.gui_queue.put(('dependency_done', {'type': 'yt-dlp', 'success': True, 'path': save_path}))
 
+        except urllib.error.URLError as e:
+            # Handle network-related errors like timeouts, DNS failures, or HTTP error codes.
+            error_message = f"Network error: {e.reason}"
+            self.gui_queue.put(('dependency_done', {'type': 'yt-dlp', 'success': False, 'error': error_message}))
         except Exception as e:
             self.gui_queue.put(('dependency_done', {'type': 'yt-dlp', 'success': False, 'error': str(e)}))
     
@@ -196,18 +235,18 @@ class DependencyManager:
             self.gui_queue.put(('dependency_done', {'type': 'ffmpeg', 'success': False, 'error': f"Unsupported OS for FFmpeg: {platform}"}))
             return
 
-        script_dir = os.path.dirname(os.path.abspath(__file__))
         url = FFMPEG_URLS[platform]
         archive_filename = os.path.basename(url)
-        archive_path = os.path.join(script_dir, archive_filename)
-        extract_dir = os.path.join(script_dir, "ffmpeg_temp")
+        archive_path = os.path.join(APP_PATH, archive_filename)
+        extract_dir = os.path.join(APP_PATH, "ffmpeg_temp")
         final_ffmpeg_name = 'ffmpeg.exe' if platform == 'win32' else 'ffmpeg'
-        final_ffmpeg_path = os.path.join(script_dir, final_ffmpeg_name)
+        final_ffmpeg_path = os.path.join(APP_PATH, final_ffmpeg_name)
 
         try:
             # 1. Download the compressed archive with progress reporting.
             self.gui_queue.put(('dependency_progress', {'type': 'ffmpeg', 'status': 'determinate', 'text': 'Preparing download...', 'value': 0}))
-            with urllib.request.urlopen(url) as response:
+            req = urllib.request.Request(url, headers=REQUEST_HEADERS)
+            with urllib.request.urlopen(req, timeout=URL_TIMEOUT) as response:
                 total_size = int(response.getheader('Content-Length', 0))
                 chunk_size = 8192
                 bytes_downloaded = 0
@@ -261,6 +300,10 @@ class DependencyManager:
             self.ffmpeg_path = final_ffmpeg_path
             self.gui_queue.put(('dependency_done', {'type': 'ffmpeg', 'success': True, 'path': final_ffmpeg_path}))
 
+        except urllib.error.URLError as e:
+            # Handle network-related errors like timeouts, DNS failures, or HTTP error codes.
+            error_message = f"Network error: {e.reason}"
+            self.gui_queue.put(('dependency_done', {'type': 'ffmpeg', 'success': False, 'error': error_message}))
         except Exception as e:
             self.gui_queue.put(('dependency_done', {'type': 'ffmpeg', 'success': False, 'error': str(e)}))
         finally:
@@ -278,7 +321,6 @@ class DownloadManager:
         self.gui_queue = gui_queue
         self.job_queue = queue.Queue()
         self.workers = []
-        self.job_counter = 0
         self.completed_jobs = 0
         self.total_jobs = 0
         self.stats_lock = threading.Lock()
@@ -310,8 +352,6 @@ class DownloadManager:
             self.gui_queue.put(('log', "Error: yt-dlp path is not set."))
             return
         
-        self.gui_queue.put(('downloads_started', None)) # Signal to the GUI to update its state.
-        
         # Reset counters and flags for a new batch of downloads.
         with self.stats_lock:
             self.completed_jobs = 0
@@ -335,7 +375,6 @@ class DownloadManager:
             self.gui_queue.put(('log', "Error: yt-dlp path is not set."))
             return
         
-        self.gui_queue.put(('downloads_started', None)) # Ensure the GUI is in a 'downloading' state.
         self.gui_queue.put(('log', f"Retrying {len(urls)} failed download(s)."))
         
         with self.stats_lock:
@@ -343,9 +382,7 @@ class DownloadManager:
         
         for video_url in urls:
             if self.stop_event.is_set(): break
-            with self.stats_lock:
-                job_id = f"job_{self.job_counter}"
-                self.job_counter += 1
+            job_id = str(uuid.uuid4())
             
             self.gui_queue.put(('add_job', (job_id, video_url, "Queued", "0%")))
             self.job_queue.put((job_id, video_url, options.copy()))
@@ -420,12 +457,12 @@ class DownloadManager:
         with self.stats_lock:
             self.total_jobs = 0
             self.completed_jobs = 0
-            self.job_counter = 0
         self.gui_queue.put(('reset_progress', None))
 
     def _process_urls_and_feed_queue(self, urls, options):
         """
         Expands playlists/channels into individual video URLs and adds them to the job queue.
+        This method streams URLs from yt-dlp to handle very large playlists efficiently.
         """
         for url in urls:
             if self.stop_event.is_set():
@@ -437,36 +474,59 @@ class DownloadManager:
                 # Use yt-dlp to get a flat list of all video URLs from a playlist/channel.
                 command = [self.yt_dlp_path, '--flat-playlist', '--print', '%(webpage_url)s', url]
                 
+                # Merge stderr with stdout to prevent pipe buffer deadlocks while streaming output.
                 process = subprocess.Popen(
                     command,
-                    stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding='utf-8',
+                    stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, encoding='utf-8',
+                    errors='replace', bufsize=1,
                     creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == 'win32' else 0
                 )
-                stdout, stderr = process.communicate()
 
-                if process.returncode != 0:
-                    self.gui_queue.put(('log', f"Error processing URL {url}: {stderr.strip()}"))
+                video_count = 0
+                other_output = []
+                # Stream the combined output line-by-line.
+                for line in iter(process.stdout.readline, ''):
+                    if self.stop_event.is_set():
+                        break
+
+                    line_stripped = line.strip()
+                    if not line_stripped:
+                        continue
+
+                    # --print outputs URLs to stdout. Other messages (info, warnings, errors) go to stderr.
+                    # By checking the line format, we can separate them from the merged stream.
+                    if line_stripped.startswith('http://') or line_stripped.startswith('https://'):
+                        video_url = line_stripped
+                        video_count += 1
+                        job_id = str(uuid.uuid4())
+                        with self.stats_lock:
+                            self.total_jobs += 1
+                        
+                        self.gui_queue.put(('add_job', (job_id, video_url, "Queued", "0%")))
+                        self.job_queue.put((job_id, video_url, options.copy()))
+                    else:
+                        # Collect non-URL output to display later if an error occurs.
+                        other_output.append(line_stripped)
+
+                # Wait for the process to complete and get the return code.
+                process.stdout.close()
+                return_code = process.wait()
+
+                # If the user cancelled during processing, log it and move on.
+                if self.stop_event.is_set():
+                    self.gui_queue.put(('log', f"Processing of {url} cancelled."))
                     continue
 
-                video_urls = [line for line in stdout.splitlines() if line.strip()]
-                if not video_urls:
-                     self.gui_queue.put(('log', f"Warning: No videos found for URL {url}"))
-                     continue
+                if return_code != 0:
+                    # If the process failed, log the collected stderr-like output.
+                    stderr_output = "\n".join(other_output)
+                    self.gui_queue.put(('log', f"Error processing URL {url}: {stderr_output.strip()}"))
+                    continue
 
-                self.gui_queue.put(('log', f"Found {len(video_urls)} video(s) for {url}."))
-                
-                with self.stats_lock:
-                    self.total_jobs += len(video_urls)
-                
-                # Add each individual video URL as a job to the main queue.
-                for video_url in video_urls:
-                    if self.stop_event.is_set(): break
-                    with self.stats_lock:
-                        job_id = f"job_{self.job_counter}"
-                        self.job_counter += 1
-                    
-                    self.gui_queue.put(('add_job', (job_id, video_url, "Queued", "0%")))
-                    self.job_queue.put((job_id, video_url, options.copy()))
+                if video_count == 0:
+                     self.gui_queue.put(('log', f"Warning: No videos found for URL {url}"))
+                else:
+                    self.gui_queue.put(('log', f"Found and queued {video_count} video(s) for {url}."))
 
             except Exception as e:
                 self.gui_queue.put(('log', f"An unexpected error occurred while processing {url}: {e}"))
@@ -935,6 +995,9 @@ class YTDlpDownloaderApp:
             self.initiate_dependency_download('ffmpeg')
             return
 
+        # Immediately update the UI state to prevent race conditions from rapid clicks.
+        self.update_button_states(is_downloading=True)
+
         urls = [url for url in urls_raw.split('\n') if url.strip()]
         self.url_text.delete(1.0, tk.END)
         
@@ -1011,14 +1074,14 @@ class YTDlpDownloaderApp:
                 elif message_type == 'reset_progress':
                     self.update_overall_progress()
                 
-                elif message_type == 'downloads_started':
-                    self.update_button_states(is_downloading=True)
-
                 elif message_type == 'dependency_progress':
                     self.update_dependency_progress(value)
 
                 elif message_type == 'dependency_done':
                     self.handle_dependency_result(value)
+
+                elif message_type == 'set_yt_dlp_version':
+                    self.yt_dlp_version_var.set(value)
 
         except queue.Empty:
             # If the window has been destroyed, don't schedule the next check.
@@ -1240,7 +1303,8 @@ class YTDlpDownloaderApp:
         self.yt_dlp_version_var.set("Checking...")
         def _get_version():
             version = self.dep_manager.get_yt_dlp_version()
-            self.yt_dlp_version_var.set(version)
+            # Safely update the GUI via the queue from the background thread.
+            self.gui_queue.put(('set_yt_dlp_version', version))
         threading.Thread(target=_get_version, daemon=True).start()
 
     def toggle_update_buttons(self, enabled):
@@ -1333,6 +1397,8 @@ class YTDlpDownloaderApp:
             'embed_thumbnail': self.embed_thumbnail_var.get()
         }
         
+        # Ensure the UI is in a downloading state for the retry.
+        self.update_button_states(is_downloading=True)
         self.download_manager.add_jobs(urls_to_retry, options)
 
     def browse_output_path(self):
