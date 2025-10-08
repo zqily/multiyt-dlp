@@ -12,6 +12,17 @@ import zipfile
 import tarfile
 import json
 
+# --- Helper Function for PyInstaller ---
+def resource_path(relative_path):
+    """ Get absolute path to resource, works for dev and for PyInstaller """
+    try:
+        # PyInstaller creates a temp folder and stores path in _MEIPASS
+        base_path = sys._MEIPASS
+    except Exception:
+        base_path = os.path.abspath(".")
+
+    return os.path.join(base_path, relative_path)
+
 # --- Constants ---
 # URLs for the latest yt-dlp releases from GitHub.
 YT_DLP_URLS = {
@@ -34,10 +45,10 @@ CONFIG_FILE = 'config.json'
 
 def load_config():
     """
-    Loads settings from config.json.
+    Loads application settings from 'config.json'.
     
-    Returns default settings if the file doesn't exist, is corrupted,
-    or is missing keys, ensuring application robustness.
+    Provides robust defaults if the file is missing, corrupt,
+    or is missing keys, ensuring the application can always start.
     """
     defaults = {
         'download_type': 'video',
@@ -53,7 +64,7 @@ def load_config():
     try:
         with open(CONFIG_FILE, 'r') as f:
             config = json.load(f)
-            # Ensure all default keys exist in the loaded config.
+            # Ensure all default keys exist in the loaded config for forward compatibility.
             for key, value in defaults.items():
                 config.setdefault(key, value)
             return config
@@ -61,7 +72,7 @@ def load_config():
         return defaults
 
 def save_config(config_data):
-    """Saves the provided settings dictionary to config.json."""
+    """Saves the current application settings to 'config.json'."""
     try:
         with open(CONFIG_FILE, 'w') as f:
             json.dump(config_data, f, indent=4)
@@ -71,32 +82,35 @@ def save_config(config_data):
 # --- Dependency Management Class ---
 
 class DependencyManager:
-    """Handles finding, downloading, and updating yt-dlp and FFmpeg."""
+    """Manages the discovery, download, and updates for yt-dlp and FFmpeg."""
     def __init__(self, gui_queue):
         self.gui_queue = gui_queue
         self.yt_dlp_path = None
         self.ffmpeg_path = None
 
     def find_yt_dlp(self):
-        """Finds yt-dlp in the system's PATH or the script's directory."""
+        """Locates the yt-dlp executable, checking the system PATH first, then the script's directory."""
         self.yt_dlp_path = self._find_executable('yt-dlp')
         return self.yt_dlp_path
     
     def find_ffmpeg(self):
-        """Finds ffmpeg in the system's PATH or the script's directory."""
+        """Locates the ffmpeg executable, checking the system PATH first, then the script's directory."""
         self.ffmpeg_path = self._find_executable('ffmpeg')
         return self.ffmpeg_path
 
     def _find_executable(self, name):
         """
-        Helper to find an executable. Checks PATH first, then the local directory.
+        Helper to find an executable by name.
+        
+        Checks the system's PATH environment variable first, which is the preferred
+        location. If not found, it checks the local directory where the script is running.
         """
-        # Check system PATH.
+        # Check system PATH for the executable.
         path = shutil.which(name)
         if path:
             return path
         
-        # Check script's local directory.
+        # If not in PATH, check the script's local directory.
         script_dir = os.path.dirname(os.path.abspath(__file__))
         local_path = os.path.join(script_dir, f'{name}.exe' if sys.platform == 'win32' else name)
         if os.path.exists(local_path):
@@ -105,14 +119,14 @@ class DependencyManager:
         return None
 
     def get_yt_dlp_version(self):
-        """Returns the version of the found yt-dlp executable."""
+        """Returns the version of the located yt-dlp executable as a string."""
         if not self.yt_dlp_path:
             return "Not found"
         try:
             command = [self.yt_dlp_path, '--version']
+            # Execute the command without showing a console window on Windows.
             result = subprocess.check_output(
                 command, text=True, stderr=subprocess.STDOUT,
-                # Hide console window on Windows.
                 creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == 'win32' else 0
             )
             return result.strip()
@@ -120,33 +134,48 @@ class DependencyManager:
             return "Error checking version"
 
     def install_or_update_yt_dlp(self):
-        """Downloads/updates yt-dlp in a separate thread."""
+        """Initiates the download/update of yt-dlp in a background thread."""
         threading.Thread(target=self._install_or_update_yt_dlp_thread, daemon=True).start()
 
     def _install_or_update_yt_dlp_thread(self):
-        """Worker thread for downloading/updating yt-dlp."""
+        """Worker thread that handles the download and setup of yt-dlp."""
         platform = sys.platform
         if platform not in YT_DLP_URLS:
             self.gui_queue.put(('dependency_done', {'type': 'yt-dlp', 'success': False, 'error': f"Unsupported OS: {platform}"}))
             return
 
         try:
-            self.gui_queue.put(('dependency_progress', {'type': 'yt-dlp', 'status': 'indeterminate', 'text': 'Downloading/Updating yt-dlp...'}))
+            self.gui_queue.put(('dependency_progress', {'type': 'yt-dlp', 'status': 'determinate', 'text': 'Preparing download...', 'value': 0}))
             
             url = YT_DLP_URLS[platform]
             filename = os.path.basename(url)
             
-            # Standardize macOS executable name to 'yt-dlp'.
+            # Standardize macOS executable name to 'yt-dlp' for consistency.
             if platform == 'darwin' and filename == 'yt-dlp_macos':
                 save_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'yt-dlp')
             else:
                 save_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), filename)
 
             with urllib.request.urlopen(url) as response:
-                with open(save_path, 'wb') as f:
-                    f.write(response.read())
+                total_size = int(response.getheader('Content-Length', 0))
+                chunk_size = 8192
+                bytes_downloaded = 0
+                with open(save_path, 'wb') as f_out:
+                    while True:
+                        chunk = response.read(chunk_size)
+                        if not chunk:
+                            break
+                        f_out.write(chunk)
+                        bytes_downloaded += len(chunk)
+                        if total_size > 0:
+                            progress_percent = (bytes_downloaded / total_size) * 100
+                            self.gui_queue.put(('dependency_progress', {
+                                'type': 'yt-dlp', 'status': 'determinate',
+                                'text': f'Downloading... {bytes_downloaded/1024/1024:.1f}/{total_size/1024/1024:.1f} MB',
+                                'value': progress_percent
+                            }))
 
-            # Make executable on Linux/macOS.
+            # Make the downloaded file executable on Linux/macOS.
             if platform in ['linux', 'darwin']:
                 os.chmod(save_path, 0o755)
 
@@ -157,11 +186,11 @@ class DependencyManager:
             self.gui_queue.put(('dependency_done', {'type': 'yt-dlp', 'success': False, 'error': str(e)}))
     
     def download_ffmpeg(self):
-        """Downloads and extracts FFmpeg in a separate thread."""
+        """Initiates the download and extraction of FFmpeg in a background thread."""
         threading.Thread(target=self._download_ffmpeg_thread, daemon=True).start()
 
     def _download_ffmpeg_thread(self):
-        """Worker thread for downloading and extracting FFmpeg."""
+        """Worker thread that handles the multi-step process of installing FFmpeg."""
         platform = sys.platform
         if platform not in FFMPEG_URLS:
             self.gui_queue.put(('dependency_done', {'type': 'ffmpeg', 'success': False, 'error': f"Unsupported OS for FFmpeg: {platform}"}))
@@ -176,7 +205,7 @@ class DependencyManager:
         final_ffmpeg_path = os.path.join(script_dir, final_ffmpeg_name)
 
         try:
-            # 1. Download the archive with progress reporting.
+            # 1. Download the compressed archive with progress reporting.
             self.gui_queue.put(('dependency_progress', {'type': 'ffmpeg', 'status': 'determinate', 'text': 'Preparing download...', 'value': 0}))
             with urllib.request.urlopen(url) as response:
                 total_size = int(response.getheader('Content-Length', 0))
@@ -197,7 +226,7 @@ class DependencyManager:
                                 'value': progress_percent
                             }))
 
-            # 2. Extract the archive.
+            # 2. Extract the archive into a temporary directory.
             self.gui_queue.put(('dependency_progress', {'type': 'ffmpeg', 'status': 'indeterminate', 'text': 'Extracting FFmpeg...'}))
             if os.path.exists(extract_dir):
                 shutil.rmtree(extract_dir)
@@ -210,7 +239,7 @@ class DependencyManager:
                 with tarfile.open(archive_path, 'r:xz') as tar_ref:
                     tar_ref.extractall(path=extract_dir)
             
-            # 3. Find and move the executable to the script directory.
+            # 3. Find the executable within the extracted folders and move it.
             self.gui_queue.put(('dependency_progress', {'type': 'ffmpeg', 'status': 'indeterminate', 'text': 'Locating executable...'}))
             ffmpeg_executable_path = None
             for root, _, files in os.walk(extract_dir):
@@ -221,6 +250,9 @@ class DependencyManager:
             if not ffmpeg_executable_path:
                 raise FileNotFoundError(f"Could not find '{final_ffmpeg_name}' in the extracted archive.")
 
+            # Move the executable to the main script directory, replacing any old version.
+            if os.path.exists(final_ffmpeg_path):
+                os.remove(final_ffmpeg_path)
             shutil.move(ffmpeg_executable_path, final_ffmpeg_path)
 
             if platform in ['linux', 'darwin']:
@@ -232,7 +264,7 @@ class DependencyManager:
         except Exception as e:
             self.gui_queue.put(('dependency_done', {'type': 'ffmpeg', 'success': False, 'error': str(e)}))
         finally:
-            # 4. Clean up downloaded archive and temporary extraction folder.
+            # 4. Clean up the downloaded archive and temporary extraction folder.
             if os.path.exists(archive_path):
                 os.remove(archive_path)
             if os.path.exists(extract_dir):
@@ -258,27 +290,30 @@ class DownloadManager:
         self.current_output_path = None
 
     def set_config(self, max_concurrent, yt_dlp_path):
-        """Sets essential configuration from the main application."""
+        """Applies essential settings like concurrent download limit and yt-dlp path."""
         self.max_concurrent_downloads = max_concurrent
         self.yt_dlp_path = yt_dlp_path
 
     def get_stats(self):
-        """Returns thread-safe download statistics (completed, total)."""
+        """Returns thread-safe download statistics (completed jobs, total jobs)."""
         with self.stats_lock:
             return self.completed_jobs, self.total_jobs
 
     def start_downloads(self, urls, options):
         """
-        Clears previous state and starts processing a new batch of URLs.
-        Spawns a feeder thread to expand playlists and populate the job queue.
+        Initializes a new download session.
+        
+        This method resets statistics and spawns a feeder thread to expand
+        playlists and populate the job queue with individual video URLs.
         """
         if not self.yt_dlp_path:
             self.gui_queue.put(('log', "Error: yt-dlp path is not set."))
             return
         
-        # Reset counters and flags for a new session.
+        self.gui_queue.put(('downloads_started', None)) # Signal to the GUI to update its state.
+        
+        # Reset counters and flags for a new batch of downloads.
         with self.stats_lock:
-            self.job_counter = 0
             self.completed_jobs = 0
             self.total_jobs = 0
         self.gui_queue.put(('reset_progress', None))
@@ -294,12 +329,13 @@ class DownloadManager:
 
     def add_jobs(self, urls, options):
         """
-        Adds new URLs (e.g., retries) to the existing job queue without resetting stats.
+        Adds new URLs (e.g., for retries) to the existing job queue without resetting statistics.
         """
         if not self.yt_dlp_path:
             self.gui_queue.put(('log', "Error: yt-dlp path is not set."))
             return
         
+        self.gui_queue.put(('downloads_started', None)) # Ensure the GUI is in a 'downloading' state.
         self.gui_queue.put(('log', f"Retrying {len(urls)} failed download(s)."))
         
         with self.stats_lock:
@@ -312,7 +348,7 @@ class DownloadManager:
                 self.job_counter += 1
             
             self.gui_queue.put(('add_job', (job_id, video_url, "Queued", "0%")))
-            self.job_queue.put((job_id, video_url, options))
+            self.job_queue.put((job_id, video_url, options.copy()))
 
         # Start workers if they are not already running.
         self._start_workers()
@@ -322,44 +358,65 @@ class DownloadManager:
         self.gui_queue.put(('log', "\n--- STOP signal received. Terminating downloads... ---"))
         self.stop_event.set()
 
-        # 1. Clear the queue of any jobs that haven't started.
+        # 1. Clear any jobs from the queue that haven't started.
         while not self.job_queue.empty():
             try:
-                self.job_queue.get_nowait()
+                job_item = self.job_queue.get_nowait()
+                job_id = job_item[0]
+                self.gui_queue.put(('done', (job_id, 'Cancelled')))
                 self.job_queue.task_done()
             except queue.Empty:
                 break
         
-        # 2. Terminate all active subprocesses.
+        # 2. Get a snapshot of currently running processes.
         with self.active_processes_lock:
             procs_to_terminate = list(self.active_processes.items())
-        
-        for job_id, process in procs_to_terminate:
-            self.gui_queue.put(('log', f"Stopping process for {job_id}..."))
-            try:
-                process.terminate()
-            except Exception as e:
-                self.gui_queue.put(('log', f"Error stopping process for {job_id}: {e}"))
 
-        # 3. Wait for processes to exit, forcefully killing if necessary.
+        # 3. Terminate all active subprocesses.
         for job_id, process in procs_to_terminate:
+            
+            # Check if the worker thread already finished this job while we were processing the list.
+            is_active_when_terminating = False
+            with self.active_processes_lock:
+                if job_id in self.active_processes:
+                    is_active_when_terminating = True
+            
+            if not is_active_when_terminating:
+                # Job finished naturally before we could terminate it. Skip.
+                continue
+            
+            self.gui_queue.put(('log', f"Stopping process for {job_id}..."))
+            
+            try:
+                process.terminate() # Send SIGTERM.
+            except Exception as e:
+                self.gui_queue.put(('log', f"Error terminating process for {job_id}: {e}"))
+                
+            # Wait a short period, then kill if it's still running.
             try:
                 process.wait(timeout=2.0)
             except subprocess.TimeoutExpired:
                 self.gui_queue.put(('log', f"Process for {job_id} unresponsive, killing."))
-                process.kill()
+                try:
+                    process.kill() # Send SIGKILL.
+                    process.wait()
+                except Exception:
+                    pass
             except Exception as e:
                  self.gui_queue.put(('log', f"Error waiting for {job_id} to stop: {e}"))
-            finally:
-                self.gui_queue.put(('done', (job_id, 'Cancelled')))
+            
+            # Since we confirmed it was active and initiated a stop, mark it as cancelled.
+            self.gui_queue.put(('done', (job_id, 'Cancelled')))
 
-        with self.active_processes_lock:
-            self.active_processes.clear()
+            # Final removal from the dictionary.
+            with self.active_processes_lock:
+                if job_id in self.active_processes:
+                    del self.active_processes[job_id]
 
         # 4. Clean up any leftover temporary files.
         self._cleanup_temporary_files()
         
-        # 5. Reset all stats and UI progress.
+        # 5. Reset all stats and UI progress indicators.
         with self.stats_lock:
             self.total_jobs = 0
             self.completed_jobs = 0
@@ -377,7 +434,7 @@ class DownloadManager:
                 
             self.gui_queue.put(('log', f"Processing URL: {url}"))
             try:
-                # Use yt-dlp to get a flat list of all video URLs.
+                # Use yt-dlp to get a flat list of all video URLs from a playlist/channel.
                 command = [self.yt_dlp_path, '--flat-playlist', '--print', '%(webpage_url)s', url]
                 
                 process = subprocess.Popen(
@@ -401,7 +458,7 @@ class DownloadManager:
                 with self.stats_lock:
                     self.total_jobs += len(video_urls)
                 
-                # Add each individual video URL as a job.
+                # Add each individual video URL as a job to the main queue.
                 for video_url in video_urls:
                     if self.stop_event.is_set(): break
                     with self.stats_lock:
@@ -409,7 +466,7 @@ class DownloadManager:
                         self.job_counter += 1
                     
                     self.gui_queue.put(('add_job', (job_id, video_url, "Queued", "0%")))
-                    self.job_queue.put((job_id, video_url, options))
+                    self.job_queue.put((job_id, video_url, options.copy()))
 
             except Exception as e:
                 self.gui_queue.put(('log', f"An unexpected error occurred while processing {url}: {e}"))
@@ -417,12 +474,12 @@ class DownloadManager:
         self._start_workers()
 
     def _cleanup_temporary_files(self):
-        """Scans the output directory and deletes temporary download files."""
+        """Scans the output directory and deletes temporary download files (e.g., .part, .ytdl)."""
         if not self.current_output_path or not os.path.isdir(self.current_output_path):
             self.gui_queue.put(('log', "Cleanup skipped: Output path not set."))
             return
         
-        temp_extensions = {".part", ".webp"}
+        temp_extensions = {".part", ".ytdl"}
         self.gui_queue.put(('log', f"Scanning '{self.current_output_path}' for temporary files..."))
         count = 0
         try:
@@ -442,7 +499,7 @@ class DownloadManager:
 
     def _start_workers(self):
         """Ensures the correct number of worker threads are running."""
-        # Clean up any finished worker threads.
+        # Clean up any finished worker threads from the list.
         self.workers = [w for w in self.workers if w.is_alive()]
         num_to_start = self.max_concurrent_downloads - len(self.workers)
         for _ in range(num_to_start):
@@ -451,7 +508,7 @@ class DownloadManager:
             worker.start()
 
     def _worker_thread(self):
-        """The main loop for a download worker. Pulls jobs from the queue."""
+        """The main loop for a download worker. Pulls jobs from the queue and executes them."""
         while not self.stop_event.is_set():
             try:
                 job_id, url, options = self.job_queue.get(timeout=1)
@@ -459,38 +516,38 @@ class DownloadManager:
                 self._run_download_process(job_id, url, options)
                 self.job_queue.task_done()
             except queue.Empty:
-                # Queue is empty, thread can exit.
+                # Queue is empty, this thread can exit.
                 break
 
     def _run_download_process(self, job_id, url, options):
         """
-        Constructs and executes the yt-dlp command for a single download.
-        Parses output for progress and logs.
+        Constructs and executes the yt-dlp command for a single download,
+        parsing its output for progress updates and logs.
         """
         process = None
         try:
             # --- Build yt-dlp Command ---
-            progress_template = 'PROGRESS::%(progress.percentage)s'
+            progress_template = 'PROGRESS::%(progress._percent_str)s'
             output_template = os.path.join(options['output_path'], options['filename_template'])
             
             command = [
                 self.yt_dlp_path,
-                '--no-progress',  # Use custom progress template instead.
+                '--newline',      # Force progress updates on new lines for easier parsing.
                 '--progress-template', progress_template,
-                '--no-mtime',     # Don't modify file timestamps.
+                '--no-mtime',     # Avoid modifying file timestamps.
                 '-o', output_template
             ]
 
-            # Add format-specific options.
+            # Add format-specific download options.
             if options['download_type'] == 'video':
                 res = options['video_resolution']
                 
-                # BUG FIX: Ensure "Best" (from GUI) is treated as 'best' format, 
-                # instead of trying to filter by height<=?Best.
+                # If "Best" is selected, use a generic best-quality format string.
+                # Otherwise, filter by the selected resolution height.
                 if res.lower() == 'best':
                     format_str = 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best'
                 else:
-                    format_str = f'bestvideo[height<=?{res}][ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best'
+                    format_str = f'bestvideo[height<={res}][ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best'
                     
                 command.extend(['-f', format_str])
             
@@ -499,7 +556,7 @@ class DownloadManager:
                 command.extend(['-f', 'bestaudio/best', '-x']) # Extract audio.
                 if audio_format != 'best':
                     command.extend(['--audio-format', audio_format])
-                    # Set a reasonable quality for MP3.
+                    # Set a reasonable default quality for MP3.
                     if audio_format == 'mp3':
                         command.extend(['--audio-quality', '192K'])
 
@@ -509,13 +566,16 @@ class DownloadManager:
             command.append(url)
             
             # --- Execute and Monitor Process ---
-            process = subprocess.Popen(
-                command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
-                encoding='utf-8', errors='replace', bufsize=1,
-                creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == 'win32' else 0
-            )
-
             with self.active_processes_lock:
+                # If a stop signal was received just before starting, abort.
+                if self.stop_event.is_set():
+                    return
+
+                process = subprocess.Popen(
+                    command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+                    encoding='utf-8', errors='replace', bufsize=1,
+                    creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == 'win32' else 0
+                )
                 self.active_processes[job_id] = process
 
             # Read output line-by-line to parse progress in real time.
@@ -524,20 +584,46 @@ class DownloadManager:
                 clean_line = line.strip()
                 self.gui_queue.put(('log', f"[{job_id}] {clean_line}"))
                 
-                # Parse custom progress output.
+                # --- Robust Progress Parsing ---
+                percentage = None
+                
+                # 1. Try parsing our custom progress template. It's fast and reliable.
                 if clean_line.startswith('PROGRESS::'):
                     try:
                         percentage_str = clean_line.split('::', 1)[1].strip()
-                        percentage = float(percentage_str)
-                        self.gui_queue.put(('update_job', (job_id, 'progress', f"{percentage:.1f}%")))
+                        # Handle cases where yt-dlp might output "N/A" for progress.
+                        if '%' in percentage_str:
+                            percentage = float(percentage_str.rstrip('%'))
                     except (IndexError, ValueError):
                         pass # Ignore malformed progress lines.
+
+                # 2. Fallback to parsing standard '[download]' lines if the template fails.
+                if percentage is None and clean_line.lstrip().startswith('[download]'):
+                    match = re.search(r'(\d+\.?\d*)%', clean_line)
+                    if match:
+                        try:
+                            percentage = float(match.group(1))
+                        except ValueError:
+                            pass # Match was not a valid float.
+                
+                # If a valid percentage was found, update the GUI.
+                if percentage is not None:
+                    self.gui_queue.put(('update_job', (job_id, 'progress', f"{percentage:.1f}%")))
+
 
             process.stdout.close()
             return_code = process.wait()
 
+            # If a stop was requested, the stop_all_downloads handler is responsible
+            # for setting the final status to 'Cancelled'.
             if self.stop_event.is_set():
                 return
+
+            # Atomically remove the job from the active list *before* reporting completion.
+            # This prevents stop_all_downloads() from incorrectly marking a finished job as 'Cancelled'.
+            with self.active_processes_lock:
+                if job_id in self.active_processes:
+                    del self.active_processes[job_id]
 
             with self.stats_lock:
                 self.completed_jobs += 1
@@ -554,7 +640,7 @@ class DownloadManager:
                 self.gui_queue.put(('done', (job_id, f"Error")))
                 self.gui_queue.put(('log', f"[{job_id}] Exception: {e}"))
         finally:
-            # Ensure process is removed from the active list upon completion or error.
+            # Final check to ensure the process is removed from the active list, even on an error.
             with self.active_processes_lock:
                 if job_id in self.active_processes:
                     del self.active_processes[job_id]
@@ -564,9 +650,19 @@ class DownloadManager:
 
 class YTDlpDownloaderApp:
     """The main application class, handling the Tkinter GUI and event loop."""
+    MAX_LOG_LINES = 2000  # Cap the number of log lines to prevent excessive memory usage.
+
     def __init__(self, root):
         self.root = root
-        self.root.title("Robust yt-dlp Downloader")
+        self.root.title("Multiyt-dlp")
+        
+        try:
+            # Set the window icon
+            self.root.iconbitmap(resource_path('icon.ico'))
+        except tk.TclError:
+            # Handle case where icon is not found or is invalid
+            print("Warning: Could not load 'icon.ico'.")
+        
         self.root.geometry("850x750")
 
         # Load configuration from file.
@@ -574,7 +670,7 @@ class YTDlpDownloaderApp:
         self.max_concurrent_downloads = self.config.get('max_concurrent_downloads', 4)
         self.filename_template = tk.StringVar(value=self.config.get('filename_template'))
 
-        # State management.
+        # Application state management.
         self.gui_queue = queue.Queue()
         self.dependency_progress_win = None
         self.is_downloading = False
@@ -582,25 +678,26 @@ class YTDlpDownloaderApp:
         self.yt_dlp_version_var = tk.StringVar(value="Checking...")
         self.is_destroyed = False
         
-        # Core components.
+        # Core business logic components.
         self.dep_manager = DependencyManager(self.gui_queue)
         self.download_manager = DownloadManager(self.gui_queue)
 
         self.create_widgets()
 
-        # Initial check for yt-dlp on startup.
+        # Perform initial check for yt-dlp on startup.
         if not self.dep_manager.find_yt_dlp():
-            self.initiate_dependency_download('yt-dlp')
+            if not self.initiate_dependency_download('yt-dlp'):
+                return  # Abort if user declines to install the critical dependency.
         self.dep_manager.find_ffmpeg()
 
-        # Start the GUI update loop.
+        # Start the main GUI update loop.
         self.process_gui_queue()
         
-        # Save settings when the window is closed.
+        # Register the handler for the window close event.
         self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
 
     def on_closing(self):
-        """Saves configuration and gracefully exits the application."""
+        """Handles saving configuration and gracefully exiting the application."""
         if self.is_downloading:
             if not messagebox.askyesno(
                 "Confirm Exit",
@@ -610,7 +707,7 @@ class YTDlpDownloaderApp:
                 return
             self.download_manager.stop_all_downloads()
 
-        # Gather current settings from GUI variables.
+        # Gather current settings from GUI variables to save them.
         self.config['download_type'] = self.download_type_var.get()
         self.config['video_resolution'] = self.video_resolution_var.get()
         self.config['audio_format'] = self.audio_format_var.get()
@@ -620,7 +717,7 @@ class YTDlpDownloaderApp:
         self.config['last_output_path'] = self.output_path_var.get()
         
         save_config(self.config)
-        self.is_destroyed = True 
+        self.is_destroyed = True # Flag to stop the after() loop.
         self.root.destroy()
 
     def create_widgets(self):
@@ -653,11 +750,11 @@ class YTDlpDownloaderApp:
         ttk.Radiobutton(self.options_frame, text="Video", variable=self.download_type_var, value="video").pack(side=tk.LEFT, padx=10)
         ttk.Radiobutton(self.options_frame, text="Audio", variable=self.download_type_var, value="audio").pack(side=tk.LEFT, padx=10)
         
-        # Frame for options that change based on download type.
+        # A container for options that change based on download type.
         self.dynamic_options_frame = ttk.Frame(self.options_frame)
         self.dynamic_options_frame.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=20)
 
-        # Video-specific options.
+        # Video-specific options (initially hidden or shown by update_options_ui).
         self.video_options_frame = ttk.Frame(self.dynamic_options_frame)
         ttk.Label(self.video_options_frame, text="Resolution:").pack(side=tk.LEFT, padx=(0, 5))
         self.video_resolution_var = tk.StringVar(value=self.config.get('video_resolution', '1080'))
@@ -665,7 +762,7 @@ class YTDlpDownloaderApp:
         self.video_resolution_combo = ttk.Combobox(self.video_options_frame, textvariable=self.video_resolution_var, values=video_resolutions, state="readonly", width=10)
         self.video_resolution_combo.pack(side=tk.LEFT)
 
-        # Audio-specific options.
+        # Audio-specific options (initially hidden or shown by update_options_ui).
         self.audio_options_frame = ttk.Frame(self.dynamic_options_frame)
         ttk.Label(self.audio_options_frame, text="Format:").pack(side=tk.LEFT, padx=(0, 5))
         self.audio_format_var = tk.StringVar(value=self.config.get('audio_format', 'mp3'))
@@ -676,7 +773,7 @@ class YTDlpDownloaderApp:
         self.thumbnail_check = ttk.Checkbutton(self.audio_options_frame, text="Embed Thumbnail", variable=self.embed_thumbnail_var)
         self.thumbnail_check.pack(side=tk.LEFT)
         
-        self.update_options_ui() # Set initial visibility.
+        self.update_options_ui() # Set initial visibility of dynamic options.
 
         # --- Action Buttons ---
         action_frame = ttk.Frame(main_frame)
@@ -721,7 +818,7 @@ class YTDlpDownloaderApp:
         tree_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
         self.downloads_tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         
-        # Define styles for different job statuses.
+        # Define styles for different job statuses for visual feedback.
         self.downloads_tree.tag_configure('failed', background='misty rose')
         self.downloads_tree.tag_configure('completed', background='pale green')
         self.downloads_tree.tag_configure('cancelled', background='light grey')
@@ -731,6 +828,9 @@ class YTDlpDownloaderApp:
         self.tree_context_menu.add_command(label="Open Output Folder", command=self.open_output_folder)
         self.tree_context_menu.add_command(label="Retry Failed Download", command=self.retry_failed_download)
         self.downloads_tree.bind("<Button-3>", self.show_context_menu)
+        if sys.platform == "darwin": # Add macOS specific bindings for context menu.
+            self.downloads_tree.bind("<Button-2>", self.show_context_menu)
+            self.downloads_tree.bind("<Control-Button-1>", self.show_context_menu)
 
         self.log_text = scrolledtext.ScrolledText(progress_frame, wrap=tk.WORD, height=10, state='disabled')
         self.log_text.pack(fill=tk.BOTH, expand=True, pady=5)
@@ -738,7 +838,7 @@ class YTDlpDownloaderApp:
         ttk.Label(main_frame, text="Note: FFmpeg is required for audio conversion and video merging.", font=("TkDefaultFont", 8)).pack(pady=5)
 
     def update_options_ui(self, *args):
-        """Shows/hides options based on the selected download type (Video/Audio)."""
+        """Toggles the visibility of video/audio specific options based on user selection."""
         self.video_options_frame.pack_forget()
         self.audio_options_frame.pack_forget()
 
@@ -749,33 +849,42 @@ class YTDlpDownloaderApp:
             self.audio_options_frame.pack(side=tk.LEFT, fill=tk.X, expand=True)
 
     def initiate_dependency_download(self, dep_type):
-        """Prompts the user to download a missing dependency."""
+        """
+        Prompts the user to download a missing dependency and starts the process.
+        Returns False if the user declines a critical download, prompting an exit.
+        """
+        if self.is_updating_dependency:
+            return True # Don't start another download if one is already running.
+
         if dep_type == 'yt-dlp':
             if messagebox.askyesno(
                 "yt-dlp Not Found",
                 "yt-dlp executable not found.\n\nDownload the latest version automatically?"
             ):
+                self.is_updating_dependency = True
                 self.toggle_ui_state(False)
                 self.show_dependency_progress_window("Downloading yt-dlp")
                 self.dep_manager.install_or_update_yt_dlp()
             else:
                 messagebox.showerror("Critical Error", "yt-dlp is required. Exiting.")
-                self.is_destroyed = True 
-                # Defer the destroy call until after the __init__ method completes.
-                # This prevents the TclError when trying to set the protocol on a destroyed window.
+                self.is_destroyed = True
                 self.root.after(1, self.root.destroy)
+                return False  # Signal to exit.
         
         elif dep_type == 'ffmpeg':
             if messagebox.askyesno(
                 "FFmpeg Not Found",
                 "FFmpeg is required for this format but was not found.\n\nDownload it automatically? (This may be a large file)"
             ):
+                self.is_updating_dependency = True
                 self.toggle_ui_state(False)
                 self.show_dependency_progress_window("Downloading FFmpeg")
                 self.dep_manager.download_ffmpeg()
 
+        return True  # Signal to continue.
+
     def queue_downloads(self):
-        """Validates inputs and starts the download process."""
+        """Validates user inputs and starts the download process."""
         if self.is_downloading or not self.dep_manager.yt_dlp_path:
             return
 
@@ -783,13 +892,48 @@ class YTDlpDownloaderApp:
         if not urls_raw:
             messagebox.showwarning("Input Error", "Please enter at least one URL.")
             return
+
+        output_path = self.output_path_var.get()
+
+        # Pre-flight check for the output directory's validity and permissions.
+        if not os.path.isdir(output_path):
+            if os.path.exists(output_path):
+                messagebox.showerror(
+                    "Path Error",
+                    f"The specified output path exists but is a file, not a directory:\n\n{output_path}"
+                )
+                return
+            
+            # If the directory doesn't exist, ask the user for permission to create it.
+            if not messagebox.askyesno(
+                "Create Directory?",
+                f"The output directory does not exist:\n\n{output_path}\n\nDo you want to create it?"
+            ):
+                return
+            
+            try:
+                os.makedirs(output_path, exist_ok=True)
+            except OSError as e:
+                messagebox.showerror("Directory Creation Error", f"Failed to create directory:\n\n{e}")
+                return
+
+        # Check for write permissions in the target directory.
+        try:
+            test_file = os.path.join(output_path, f".writetest_{os.getpid()}")
+            with open(test_file, 'w') as f:
+                f.write('test')
+            os.remove(test_file)
+        except (IOError, OSError) as e:
+            messagebox.showerror(
+                "Permission Error",
+                f"The application cannot write to the selected output directory. Please check permissions.\n\nError: {e}"
+            )
+            return
         
-        # Check for FFmpeg if required for the selected format.
+        # Check for FFmpeg if it's required for the selected format.
         if self.download_type_var.get() == 'audio' and not self.dep_manager.find_ffmpeg():
             self.initiate_dependency_download('ffmpeg')
             return
-
-        self.update_button_states(is_downloading=True)
 
         urls = [url for url in urls_raw.split('\n') if url.strip()]
         self.url_text.delete(1.0, tk.END)
@@ -808,7 +952,7 @@ class YTDlpDownloaderApp:
         self.download_manager.start_downloads(urls, options)
 
     def stop_downloads(self):
-        """Asks for confirmation and stops all downloads if confirmed."""
+        """Asks for confirmation and then stops all downloads if confirmed."""
         if not self.is_downloading:
             return
         if messagebox.askyesno("Confirm Stop", "Stop all current and queued downloads?\n\nIncomplete files will be deleted."):
@@ -816,7 +960,7 @@ class YTDlpDownloaderApp:
             self.update_button_states(is_downloading=False)
 
     def clear_completed_list(self):
-        """Removes all finished, failed, or cancelled items from the list."""
+        """Removes all finished, failed, or cancelled items from the download list."""
         items_to_remove = []
         for item_id in self.downloads_tree.get_children():
             tags = self.downloads_tree.item(item_id, 'tags')
@@ -829,8 +973,10 @@ class YTDlpDownloaderApp:
 
     def process_gui_queue(self):
         """
-        The main GUI update loop. Processes messages from background threads.
-        This is the only place where GUI elements are modified.
+        Processes messages from background threads via the GUI queue.
+        
+        This is the sole method responsible for updating the Tkinter UI to ensure thread safety.
+        It runs on a timer using root.after().
         """
         try:
             while True:
@@ -864,6 +1010,9 @@ class YTDlpDownloaderApp:
 
                 elif message_type == 'reset_progress':
                     self.update_overall_progress()
+                
+                elif message_type == 'downloads_started':
+                    self.update_button_states(is_downloading=True)
 
                 elif message_type == 'dependency_progress':
                     self.update_dependency_progress(value)
@@ -872,12 +1021,12 @@ class YTDlpDownloaderApp:
                     self.handle_dependency_result(value)
 
         except queue.Empty:
-            # Check if the window is destroyed before scheduling the next check.
+            # If the window has been destroyed, don't schedule the next check.
             if not self.is_destroyed:
                 self.root.after(100, self.process_gui_queue)
 
     def handle_dependency_result(self, result):
-        """Processes the result of a dependency download."""
+        """Processes the success or failure result of a dependency download."""
         self.close_dependency_progress_window()
         self.toggle_ui_state(True)
         
@@ -888,19 +1037,19 @@ class YTDlpDownloaderApp:
         else:
             error_msg = result.get('error')
             messagebox.showerror(f"{dep_type.upper()} Download Failed", f"An error occurred: {error_msg}")
-            # Exit if the critical dependency (yt-dlp) failed on initial install.
+            # Exit if the critical dependency (yt-dlp) failed on the initial install attempt.
             if dep_type == 'yt-dlp' and not self.dep_manager.yt_dlp_path:
-                self.is_destroyed = True # Safety set before destroy
+                self.is_destroyed = True
                 self.root.destroy()
         
         if self.is_updating_dependency:
             self.is_updating_dependency = False
             self.toggle_update_buttons(True)
             if dep_type == 'yt-dlp':
-                self.check_yt_dlp_version() # Refresh version in settings.
+                self.check_yt_dlp_version() # Refresh version display in settings.
 
     def update_overall_progress(self):
-        """Updates the main progress bar and label."""
+        """Updates the main progress bar and its corresponding label."""
         completed, total = self.download_manager.get_stats()
         label_text = f"Overall Progress: {completed} / {total}"
         self.overall_progress_label.config(text=label_text)
@@ -911,13 +1060,13 @@ class YTDlpDownloaderApp:
         else:
             self.overall_progress_bar['value'] = 0
 
-        # Check if all jobs are done.
+        # Check if all jobs are finished and update the application state.
         if total > 0 and completed >= total and self.is_downloading:
              self.gui_queue.put(('log', "\n--- All queued downloads are complete! ---"))
              self.update_button_states(is_downloading=False)
 
     def update_button_states(self, is_downloading):
-        """Enables/disables buttons based on download state."""
+        """Enables or disables key buttons based on the application's download state."""
         self.is_downloading = is_downloading
         download_state = 'disabled' if is_downloading else 'normal'
         stop_state = 'normal' if is_downloading else 'disabled'
@@ -927,14 +1076,22 @@ class YTDlpDownloaderApp:
         self.stop_button.config(state=stop_state)
                 
     def toggle_ui_state(self, enabled):
-        """Disables or enables major UI controls to prevent user interaction."""
+        """Disables or enables major UI controls to prevent user interaction during critical operations."""
         state = 'normal' if enabled else 'disabled'
+        combo_state = 'readonly' if enabled else 'disabled'
+
         self.url_text.config(state=state)
         self.browse_button.config(state=state)
         self.download_button.config(state=state)
+
+        # Toggle all interactive widgets in the options frame.
         for child in self.options_frame.winfo_children():
-            if isinstance(child, (ttk.Radiobutton, ttk.Checkbutton, ttk.Combobox)):
+            if isinstance(child, ttk.Radiobutton):
                 child.config(state=state)
+
+        self.video_resolution_combo.config(state=combo_state)
+        self.audio_format_combo.config(state=combo_state)
+        self.thumbnail_check.config(state=state)
                 
     def show_dependency_progress_window(self, title):
         """Creates a modal progress window for dependency downloads."""
@@ -954,7 +1111,7 @@ class YTDlpDownloaderApp:
         self.dep_progress_bar.pack(pady=10)
     
     def update_dependency_progress(self, data):
-        """Updates the progress bar and label in the dependency window."""
+        """Updates the widgets in the dependency download progress window."""
         if not self.dependency_progress_win or not self.dependency_progress_win.winfo_exists():
             self.show_dependency_progress_window(f"Downloading {data.get('type')}")
 
@@ -963,13 +1120,13 @@ class YTDlpDownloaderApp:
         if data.get('status') == 'indeterminate':
             self.dep_progress_bar.config(mode='indeterminate')
             self.dep_progress_bar.start(10)
-        else: # Determinate
+        else: # Assumes 'determinate'
             self.dep_progress_bar.stop()
             self.dep_progress_bar.config(mode='determinate')
             self.dep_progress_bar['value'] = data.get('value', 0)
     
     def close_dependency_progress_window(self):
-        """Destroys the dependency progress window."""
+        """Destroys the dependency progress window if it exists."""
         if self.dependency_progress_win:
             self.dep_progress_bar.stop()
             self.dependency_progress_win.destroy()
@@ -986,14 +1143,17 @@ class YTDlpDownloaderApp:
         settings_frame = ttk.Frame(settings_win, padding="10")
         settings_frame.pack(fill=tk.BOTH, expand=True)
 
+        # Use temporary variables for settings to allow cancellation.
+        concurrent_var = tk.IntVar(value=self.max_concurrent_downloads)
+        temp_filename_template = tk.StringVar(value=self.filename_template.get()) 
+
         # Max Concurrent Downloads setting.
         ttk.Label(settings_frame, text="Max Concurrent Downloads:").grid(row=0, column=0, padx=5, pady=10, sticky=tk.W)
-        concurrent_var = tk.IntVar(value=self.max_concurrent_downloads)
         ttk.Spinbox(settings_frame, from_=1, to=20, textvariable=concurrent_var, width=5).grid(row=0, column=1, padx=5, pady=10, sticky=tk.W)
 
         # Filename Template setting.
         ttk.Label(settings_frame, text="Filename Template:").grid(row=1, column=0, padx=5, pady=5, sticky=tk.W)
-        ttk.Entry(settings_frame, textvariable=self.filename_template, width=50).grid(row=1, column=1, padx=5, pady=5, sticky=tk.EW)
+        ttk.Entry(settings_frame, textvariable=temp_filename_template, width=50).grid(row=1, column=1, padx=5, pady=5, sticky=tk.EW)
         
         help_text = "e.g., %(uploader)s - %(title)s [%(id)s].%(ext)s"
         ttk.Label(settings_frame, text=help_text, font=("TkDefaultFont", 8, "italic")).grid(row=2, column=1, sticky=tk.W, padx=5)
@@ -1016,37 +1176,67 @@ class YTDlpDownloaderApp:
         self.ffmpeg_update_button = ttk.Button(update_buttons_frame, text="Update FFmpeg", command=self.start_ffmpeg_update)
         self.ffmpeg_update_button.pack(side=tk.LEFT, padx=5)
 
-        def apply_and_close():
+        def save_and_close():
             """Validates and applies settings, then closes the window."""
             if self.is_updating_dependency:
                 messagebox.showwarning("Busy", "Cannot close settings while an update is in progress.", parent=settings_win)
                 return
 
             try:
-                # Validate concurrent downloads value.
+                # 1. Validate concurrent downloads value.
                 new_concurrent_val = concurrent_var.get()
                 if not (1 <= new_concurrent_val <= 20):
                     messagebox.showwarning("Invalid Value", "Concurrent downloads must be between 1 and 20.", parent=settings_win)
                     return
                 
-                # Validate filename template.
-                new_template = self.filename_template.get().strip()
-                if not new_template or not re.search(r'%\(title\)s|%\(id\)s', new_template):
-                    messagebox.showwarning("Invalid Value", "Template cannot be empty and must include %(title)s or %(id)s.", parent=settings_win)
+                # 2. Validate filename template for basic requirements.
+                new_template = temp_filename_template.get().strip() 
+                if not new_template or not re.search(r'%\((title|id)', new_template):
+                    messagebox.showwarning("Invalid Value", "Template must include %(title)s or %(id)s.", parent=settings_win)
+                    return
+
+                # Prevent path traversal and absolute paths in the template for security.
+                if '/' in new_template or '\\' in new_template:
+                    messagebox.showerror(
+                        "Invalid Filename Template",
+                        "Filename template cannot contain path separators ('/' or '\\').",
+                        parent=settings_win
+                    )
                     return
                 
+                if os.path.isabs(new_template):
+                    messagebox.showerror(
+                        "Invalid Filename Template",
+                        "Filename template cannot be an absolute path.",
+                        parent=settings_win
+                    )
+                    return
+                
+                # 3. Apply settings only after all validation passes.
                 self.max_concurrent_downloads = new_concurrent_val
+                self.filename_template.set(new_template) 
+                
                 self.log(f"Settings updated: Max concurrent downloads set to {self.max_concurrent_downloads}.")
                 self.log(f"Settings updated: Filename template set to '{self.filename_template.get()}'.")
                 settings_win.destroy()
             except tk.TclError:
                  messagebox.showwarning("Invalid Value", "Please enter a valid number for concurrent downloads.", parent=settings_win)
 
-        ttk.Button(settings_frame, text="Save and Close", command=apply_and_close).grid(row=4, column=0, columnspan=2, pady=15)
-        settings_win.protocol("WM_DELETE_WINDOW", apply_and_close)
+        # Action buttons for the settings window.
+        buttons_frame = ttk.Frame(settings_frame)
+        buttons_frame.grid(row=4, column=0, columnspan=2, pady=15, sticky=tk.E)
+
+        save_button = ttk.Button(buttons_frame, text="Save", command=save_and_close)
+        save_button.pack(side=tk.LEFT, padx=5)
+        
+        cancel_button = ttk.Button(buttons_frame, text="Cancel", command=settings_win.destroy)
+        cancel_button.pack(side=tk.LEFT)
+
+        # Make the 'X' button act as a cancel button.
+        settings_win.protocol("WM_DELETE_WINDOW", settings_win.destroy)
 
     def check_yt_dlp_version(self):
-        """Gets the yt-dlp version in a thread to avoid blocking the GUI."""
+        """Gets the yt-dlp version in a background thread to avoid blocking the GUI."""
         self.yt_dlp_version_var.set("Checking...")
         def _get_version():
             version = self.dep_manager.get_yt_dlp_version()
@@ -1054,7 +1244,7 @@ class YTDlpDownloaderApp:
         threading.Thread(target=_get_version, daemon=True).start()
 
     def toggle_update_buttons(self, enabled):
-        """Enables/disables the update buttons in the settings window."""
+        """Enables or disables the update buttons in the settings window."""
         state = 'normal' if enabled else 'disabled'
         if hasattr(self, 'yt_dlp_update_button') and self.yt_dlp_update_button.winfo_exists():
             self.yt_dlp_update_button.config(state=state)
@@ -1062,7 +1252,7 @@ class YTDlpDownloaderApp:
             self.ffmpeg_update_button.config(state=state)
 
     def start_yt_dlp_update(self):
-        """Starts the yt-dlp update process after confirmation."""
+        """Starts the yt-dlp update process after user confirmation."""
         if self.is_updating_dependency: return
         if messagebox.askyesno("Confirm Update", "Download the latest version of yt-dlp?", parent=self.root):
             self.is_updating_dependency = True
@@ -1071,7 +1261,7 @@ class YTDlpDownloaderApp:
             self.dep_manager.install_or_update_yt_dlp()
 
     def start_ffmpeg_update(self):
-        """Starts the FFmpeg download/update process after confirmation."""
+        """Starts the FFmpeg download/update process after user confirmation."""
         if self.is_updating_dependency: return
         if messagebox.askyesno("Confirm Update", "Download the latest version of FFmpeg? This can be a large file.", parent=self.root):
             self.is_updating_dependency = True
@@ -1080,16 +1270,16 @@ class YTDlpDownloaderApp:
             self.dep_manager.download_ffmpeg()
 
     def show_context_menu(self, event):
-        """Displays the right-click context menu on the downloads list."""
+        """Displays the right-click context menu over the downloads list."""
         item_id = self.downloads_tree.identify_row(event.y)
         if not item_id:
             return
 
-        # Select the item under the cursor if it's not already selected.
+        # Select the item under the cursor if it's not already part of a selection.
         if item_id not in self.downloads_tree.selection():
             self.downloads_tree.selection_set(item_id)
         
-        # Enable "Retry" option only if at least one selected item has failed.
+        # Enable the "Retry" option only if at least one selected item has a 'failed' status.
         is_failed = any('failed' in self.downloads_tree.item(s_item_id, 'tags') 
                         for s_item_id in self.downloads_tree.selection())
         
@@ -1099,7 +1289,7 @@ class YTDlpDownloaderApp:
         self.tree_context_menu.post(event.x_root, event.y_root)
 
     def open_output_folder(self):
-        """Opens the current output folder in the system's file explorer."""
+        """Opens the current output folder in the system's default file explorer."""
         path = self.output_path_var.get()
         if not os.path.isdir(path):
             messagebox.showerror("Error", f"Output folder does not exist:\n{path}")
@@ -1129,11 +1319,11 @@ class YTDlpDownloaderApp:
         if not urls_to_retry:
             return
 
-        # Delete the old failed entries from the list.
+        # Delete the old failed entries from the list before re-queuing.
         for item_id in items_to_delete:
             self.downloads_tree.delete(item_id)
 
-        # Get current options and add jobs to the queue.
+        # Get current options and add the jobs back to the download queue.
         options = {
             'output_path': self.output_path_var.get(),
             'filename_template': self.filename_template.get(),
@@ -1143,23 +1333,30 @@ class YTDlpDownloaderApp:
             'embed_thumbnail': self.embed_thumbnail_var.get()
         }
         
-        if not self.is_downloading:
-            self.update_button_states(is_downloading=True)
-        
         self.download_manager.add_jobs(urls_to_retry, options)
 
     def browse_output_path(self):
-        """Opens a dialog to select the output directory."""
+        """Opens a dialog to allow the user to select the output directory."""
         path = filedialog.askdirectory(initialdir=self.output_path_var.get())
         if path:
             self.output_path_var.set(path)
             
     def log(self, message):
-        """Appends a message to the log widget, ensuring it's always visible."""
+        """
+        Appends a message to the log widget, trimming old lines to save memory
+        and prevent performance degradation with very large amounts of output.
+        """
         # The state is toggled to allow insertion and then prevent user editing.
         self.log_text.config(state='normal')
         self.log_text.insert(tk.END, message + '\n')
-        self.log_text.see(tk.END)
+
+        # Trim the log if it exceeds the maximum number of lines.
+        num_lines = int(self.log_text.index('end-1c').split('.')[0])
+        if num_lines > self.MAX_LOG_LINES:
+            lines_to_delete = num_lines - self.MAX_LOG_LINES
+            self.log_text.delete('1.0', f'{lines_to_delete + 1}.0')
+
+        self.log_text.see(tk.END) # Scroll to the end.
         self.log_text.config(state='disabled')
 
 
