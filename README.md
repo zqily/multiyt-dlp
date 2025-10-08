@@ -1,4 +1,4 @@
-# MultiYT-DLP: A Robust GUI for yt-dlp
+# Multiyt-dlp: A Robust GUI for yt-dlp
 
 A user-friendly graphical interface for the powerful command-line tool `yt-dlp`. It's designed to simplify the process of downloading multiple videos or entire playlists in parallel, with easy-to-select format options and automatic dependency handling.
 
