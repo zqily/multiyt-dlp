@@ -484,10 +484,14 @@ class DownloadManager:
             # Add format-specific options.
             if options['download_type'] == 'video':
                 res = options['video_resolution']
-                format_str = (
-                    'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best' if res == 'best' 
-                    else f'bestvideo[height<=?{res}][ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best'
-                )
+                
+                # BUG FIX: Ensure "Best" (from GUI) is treated as 'best' format, 
+                # instead of trying to filter by height<=?Best.
+                if res.lower() == 'best':
+                    format_str = 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best'
+                else:
+                    format_str = f'bestvideo[height<=?{res}][ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best'
+                    
                 command.extend(['-f', format_str])
             
             elif options['download_type'] == 'audio':
