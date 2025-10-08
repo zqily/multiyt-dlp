@@ -2,7 +2,7 @@
 
 A user-friendly graphical interface for the powerful command-line tool `yt-dlp`. It's designed to simplify the process of downloading multiple videos or entire playlists in parallel, with easy-to-select format options and automatic dependency handling.
 
-<img width="1277" height="1074" alt="image" src="https://github.com/user-attachments/assets/25ecabb2-0cb1-4514-adb0-5456bd2c947f" />
+<img width="852" height="782" alt="image" src="https://github.com/user-attachments/assets/858ac158-f093-43a0-bfdc-e5e6f05baeb9" />
 
 ## ✨ Key Features
 
