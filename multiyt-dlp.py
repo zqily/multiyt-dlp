@@ -278,7 +278,6 @@ class DownloadManager:
         
         # Reset counters and flags for a new session.
         with self.stats_lock:
-            self.job_counter = 0
             self.completed_jobs = 0
             self.total_jobs = 0
         self.gui_queue.put(('reset_progress', None))
