@@ -771,7 +771,9 @@ class YTDlpDownloaderApp:
 
     def open_settings_window(self):
         if self.settings_win and self.settings_win.winfo_exists(): self.settings_win.lift(); return
-        self.settings_win = tk.Toplevel(self.root); self.settings_win.title("Settings"); self.settings_win.geometry("550x400"); self.settings_win.resizable(False, False); self.settings_win.transient(self.root)
+        self.settings_win = tk.Toplevel(self.root); self.settings_win.title("Settings"); self.settings_win.geometry("600x400"); self.settings_win.resizable(False, False); self.settings_win.transient(self.root)
+        try: self.settings_win.iconbitmap(resource_path('icon.ico'))
+        except tk.TclError: pass
         settings_frame = ttk.Frame(self.settings_win, padding="10"); settings_frame.pack(fill=tk.BOTH, expand=True)
         concurrent_var, temp_filename_template = tk.IntVar(value=self.max_concurrent_downloads), tk.StringVar(value=self.filename_template.get())
         ttk.Label(settings_frame, text="Max Concurrent Downloads:").grid(row=0, column=0, padx=5, pady=10, sticky=tk.W)
