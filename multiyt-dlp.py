@@ -36,7 +36,7 @@ SUBPROCESS_CREATION_FLAGS = subprocess.CREATE_NO_WINDOW if sys.platform == 'win3
 def resource_path(relative_path):
     """ Get absolute path to resource, works for dev and for PyInstaller """
     try:
-        base_path = sys._MEIPASS
+        base_path = sys._MEIPASS  # type: ignore
     except Exception:
         base_path = APP_PATH
     return os.path.join(base_path, relative_path)
@@ -359,6 +359,7 @@ class DownloadManager:
 
     def _url_processor_worker(self):
         while not self.stop_event.is_set():
+            url, options = None, None
             try:
                 url, options = self.url_processing_queue.get(timeout=1)
                 self.gui_queue.put(('log', f"[{threading.current_thread().name}] Started processing: {url}"))
@@ -368,7 +369,8 @@ class DownloadManager:
             except queue.Empty:
                 break
             except Exception as e:
-                self.gui_queue.put(('log', f"[{threading.current_thread().name}] Error processing URL {url}: {e}"))
+                url_str = url if url else "an unknown URL"
+                self.gui_queue.put(('log', f"[{threading.current_thread().name}] Error processing {url_str}: {e}"))
                 if not self.url_processing_queue.empty(): self.url_processing_queue.task_done()
 
     def _expand_url_and_queue_jobs(self, url, options):
@@ -465,28 +467,31 @@ class DownloadManager:
                 process = subprocess.Popen(command, **popen_kwargs)
                 self.active_processes[job_id] = process
             
-            for line in iter(process.stdout.readline, ''):
-                if self.stop_event.is_set(): break
-                clean_line = line.strip()
-                self.gui_queue.put(('log', f"[{job_id}] {clean_line}"))
-                if clean_line.startswith('ERROR:'): error_message = clean_line[6:].strip()
-                status_match = re.search(r'\[(\w+)\]', clean_line)
-                if status_match:
-                    status_key = status_match.group(1).lower()
-                    status_map = {'merger': 'Merging...', 'extractaudio': 'Extracting Audio...', 'embedthumbnail': 'Embedding...', 'fixupm4a': 'Fixing M4a...', 'metadata': 'Writing Metadata...'}
-                    if status_key in status_map: self.gui_queue.put(('update_job', (job_id, 'status', status_map[status_key])))
-                percentage = None
-                if clean_line.startswith('PROGRESS::'):
-                    try: percentage = float(clean_line.split('::', 1)[1].strip().rstrip('%'))
-                    except (IndexError, ValueError): pass
-                elif '[download]' in clean_line:
-                    match = re.search(r'(\d+\.?\d*)%', clean_line)
-                    if match:
-                        try: percentage = float(match.group(1))
-                        except ValueError: pass
-                if percentage is not None: self.gui_queue.put(('update_job', (job_id, 'progress', f"{percentage:.1f}%")))
+            if process.stdout:
+                for line in iter(process.stdout.readline, ''):
+                    if self.stop_event.is_set(): break
+                    clean_line = line.strip()
+                    self.gui_queue.put(('log', f"[{job_id}] {clean_line}"))
+                    if clean_line.startswith('ERROR:'): error_message = clean_line[6:].strip()
+                    status_match = re.search(r'\[(\w+)\]', clean_line)
+                    if status_match:
+                        status_key = status_match.group(1).lower()
+                        status_map = {'merger': 'Merging...', 'extractaudio': 'Extracting Audio...', 'embedthumbnail': 'Embedding...', 'fixupm4a': 'Fixing M4a...', 'metadata': 'Writing Metadata...'}
+                        if status_key in status_map: self.gui_queue.put(('update_job', (job_id, 'status', status_map[status_key])))
+                    percentage = None
+                    if clean_line.startswith('PROGRESS::'):
+                        try: percentage = float(clean_line.split('::', 1)[1].strip().rstrip('%'))
+                        except (IndexError, ValueError): pass
+                    elif '[download]' in clean_line:
+                        match = re.search(r'(\d+\.?\d*)%', clean_line)
+                        if match:
+                            try: percentage = float(match.group(1))
+                            except ValueError: pass
+                    if percentage is not None: self.gui_queue.put(('update_job', (job_id, 'progress', f"{percentage:.1f}%")))
+                
+                process.stdout.close()
             
-            process.stdout.close(); return_code = process.wait()
+            return_code = process.wait()
             if self.stop_event.is_set(): return
             if return_code == 0: final_status = 'Completed'
             elif error_message: final_status = f"Failed: {error_message[:60]}"
@@ -762,16 +767,22 @@ class YTDlpDownloaderApp:
 
     def update_dependency_progress(self, data):
         if not self.dependency_progress_win or not self.dependency_progress_win.winfo_exists(): self.show_dependency_progress_window(f"Downloading {data.get('type')}")
-        self.dep_progress_label.config(text=data.get('text', ''))
-        if data.get('status') == 'indeterminate': self.dep_progress_bar.config(mode='indeterminate'); self.dep_progress_bar.start(10)
-        else: self.dep_progress_bar.stop(); self.dep_progress_bar.config(mode='determinate'); self.dep_progress_bar['value'] = data.get('value', 0)
+        if self.dependency_progress_win:
+            self.dep_progress_label.config(text=data.get('text', ''))
+            if data.get('status') == 'indeterminate': self.dep_progress_bar.config(mode='indeterminate'); self.dep_progress_bar.start(10)
+            else: self.dep_progress_bar.stop(); self.dep_progress_bar.config(mode='determinate'); self.dep_progress_bar['value'] = data.get('value', 0)
 
     def close_dependency_progress_window(self):
-        if self.dependency_progress_win: self.dep_progress_bar.stop(); self.dependency_progress_win.destroy(); self.dependency_progress_win = None
+        if self.dependency_progress_win:
+            self.dep_progress_bar.stop()
+            self.dependency_progress_win.destroy()
+            self.dependency_progress_win = None
 
     def open_settings_window(self):
         if self.settings_win and self.settings_win.winfo_exists(): self.settings_win.lift(); return
-        self.settings_win = tk.Toplevel(self.root); self.settings_win.title("Settings"); self.settings_win.geometry("550x400"); self.settings_win.resizable(False, False); self.settings_win.transient(self.root)
+        self.settings_win = tk.Toplevel(self.root); self.settings_win.title("Settings"); self.settings_win.geometry("600x400"); self.settings_win.resizable(False, False); self.settings_win.transient(self.root)
+        try: self.settings_win.iconbitmap(resource_path('icon.ico'))
+        except tk.TclError: pass
         settings_frame = ttk.Frame(self.settings_win, padding="10"); settings_frame.pack(fill=tk.BOTH, expand=True)
         concurrent_var, temp_filename_template = tk.IntVar(value=self.max_concurrent_downloads), tk.StringVar(value=self.filename_template.get())
         ttk.Label(settings_frame, text="Max Concurrent Downloads:").grid(row=0, column=0, padx=5, pady=10, sticky=tk.W)
@@ -789,21 +800,45 @@ class YTDlpDownloaderApp:
         self.ffmpeg_update_button = ttk.Button(update_buttons_frame, text="Download/Update FFmpeg", command=self.start_ffmpeg_update); self.ffmpeg_update_button.pack(side=tk.LEFT, padx=5)
         
         def save_and_close():
-            if self.is_updating_dependency: messagebox.showwarning("Busy", "Cannot close settings while updating.", parent=self.settings_win); return
-            new_concurrent_val = concurrent_var.get(); new_template = temp_filename_template.get().strip()
-            if not (1 <= new_concurrent_val <= 20): messagebox.showwarning("Invalid Value", "Concurrent downloads must be between 1 and 20.", parent=self.settings_win); return
-            if not new_template or not re.search(r'%\((title|id)', new_template): messagebox.showwarning("Invalid Template", "Template must include %(title)s or %(id)s.", parent=self.settings_win); return
-            if any(c in new_template for c in '/\\') or '..' in new_template or os.path.isabs(new_template): messagebox.showerror("Invalid Template", "Template cannot contain path separators ('/', '\\'), '..', or be absolute.", parent=self.settings_win); return
+            # Assign to a local variable for clarity and to help the type checker.
+            settings_window = self.settings_win
+            # This guard clause ensures the window exists. Pylance now knows 'settings_window' is not None.
+            if not settings_window:
+                return
+
+            if self.is_updating_dependency: 
+                messagebox.showwarning("Busy", "Cannot close settings while updating.", parent=settings_window)
+                return
+            
+            new_concurrent_val = concurrent_var.get()
+            new_template = temp_filename_template.get().strip()
+            
+            if not (1 <= new_concurrent_val <= 20): 
+                messagebox.showwarning("Invalid Value", "Concurrent downloads must be between 1 and 20.", parent=settings_window)
+                return
+            if not new_template or not re.search(r'%\((title|id)', new_template): 
+                messagebox.showwarning("Invalid Template", "Template must include %(title)s or %(id)s.", parent=settings_window)
+                return
+            if any(c in new_template for c in '/\\') or '..' in new_template or os.path.isabs(new_template): 
+                messagebox.showerror("Invalid Template", "Template cannot contain path separators ('/', '\\'), '..', or be absolute.", parent=settings_window)
+                return
             
             self.max_concurrent_downloads = new_concurrent_val
             self.filename_template.set(new_template)
             self.config['max_concurrent_downloads'] = self.max_concurrent_downloads
             self.config['filename_template'] = self.filename_template.get()
             self.config_manager.save(self.config)
-            self.settings_win.destroy()
+            settings_window.destroy()
 
-        buttons_frame = ttk.Frame(settings_frame); buttons_frame.grid(row=4, column=0, columnspan=2, pady=15, sticky=tk.E)
-        ttk.Button(buttons_frame, text="Save", command=save_and_close).pack(side=tk.LEFT, padx=5); ttk.Button(buttons_frame, text="Cancel", command=self.settings_win.destroy).pack(side=tk.LEFT); self.settings_win.protocol("WM_DELETE_WINDOW", self.settings_win.destroy)
+        def cancel_and_close():
+            if self.settings_win:
+                self.settings_win.destroy()
+        
+        buttons_frame = ttk.Frame(settings_frame)
+        buttons_frame.grid(row=4, column=0, columnspan=2, pady=15, sticky=tk.E)
+        ttk.Button(buttons_frame, text="Save", command=save_and_close).pack(side=tk.LEFT, padx=5)
+        ttk.Button(buttons_frame, text="Cancel", command=cancel_and_close).pack(side=tk.LEFT)
+        self.settings_win.protocol("WM_DELETE_WINDOW", cancel_and_close)
 
     def check_yt_dlp_version(self):
         self.yt_dlp_version_var.set("Checking...")
@@ -822,7 +857,8 @@ class YTDlpDownloaderApp:
     def start_ffmpeg_update(self): self._start_dep_update("ffmpeg", "Download latest FFmpeg? (Large file)")
     def _start_dep_update(self, dep_type, message):
         if self.is_updating_dependency: return
-        if messagebox.askyesno(f"Confirm Update", message, parent=self.settings_win or self.root):
+        parent_win = self.settings_win if self.settings_win and self.settings_win.winfo_exists() else self.root
+        if messagebox.askyesno(f"Confirm Update", message, parent=parent_win):
             self.is_updating_dependency = True; self.toggle_update_buttons(False); self.show_dependency_progress_window(f"Updating {dep_type}"); getattr(self.dep_manager, f'{"install_or_update" if dep_type == "yt-dlp" else "download"}_{dep_type}')()
 
     def show_context_menu(self, event):
