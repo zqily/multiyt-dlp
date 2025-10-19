@@ -7,13 +7,13 @@ import re
 import urllib.parse
 import threading
 import logging
-import logging.handlers
+import webbrowser
 
 from ._version import __version__
-from .config import ConfigManager
 from .constants import CONFIG_FILE, resource_path
 from .dependencies import DependencyManager
 from .downloads import DownloadManager
+from .app_updater import AppUpdater
 
 
 class YTDlpDownloaderApp:
@@ -36,7 +36,7 @@ class YTDlpDownloaderApp:
         
         self.max_concurrent_downloads = self.config.get('max_concurrent_downloads')
         self.filename_template = tk.StringVar(value=self.config.get('filename_template'))
-        self.dependency_progress_win, self.settings_win = None, None
+        self.dependency_progress_win, self.settings_win, self.update_dialog = None, None, None
         self.is_downloading, self.is_updating_dependency, self.is_destroyed = False, False, False
         self.pending_download_task = None
         self.yt_dlp_version_var = tk.StringVar(value="Checking...")
@@ -44,6 +44,9 @@ class YTDlpDownloaderApp:
         
         self.dep_manager = DependencyManager(self.gui_queue)
         self.download_manager = DownloadManager(self.gui_queue)
+        self.app_updater = AppUpdater(self.gui_queue, self.config)
+        if self.config.get('check_for_updates_on_startup', True):
+            self.root.after(2000, self.app_updater.check_for_updates)
         
         self.create_widgets()
         self.logger.info(f"Config path: {CONFIG_FILE}")
@@ -215,6 +218,7 @@ class YTDlpDownloaderApp:
                     elif msg_type == 'set_yt_dlp_version': self.yt_dlp_version_var.set(value)
                     elif msg_type == 'set_ffmpeg_status': self.ffmpeg_status_var.set(value)
                     elif msg_type == 'url_processing_done': self.toggle_url_input_state(True)
+                    elif msg_type == 'new_version_available': self._show_update_dialog(value['version'], value['url'])
         except queue.Empty:
             if not self.is_destroyed: self.root.after(100, self.process_gui_queue)
 
@@ -312,7 +316,7 @@ class YTDlpDownloaderApp:
 
     def open_settings_window(self):
         if self.settings_win and self.settings_win.winfo_exists(): self.settings_win.lift(); return
-        self.settings_win = tk.Toplevel(self.root); self.settings_win.title("Settings"); self.settings_win.geometry("600x450"); self.settings_win.resizable(False, False); self.settings_win.transient(self.root)
+        self.settings_win = tk.Toplevel(self.root); self.settings_win.title("Settings"); self.settings_win.geometry("600x480"); self.settings_win.resizable(False, False); self.settings_win.transient(self.root)
         try: self.settings_win.iconbitmap(resource_path('icon.ico'))
         except tk.TclError: pass
         settings_frame = ttk.Frame(self.settings_win, padding="10"); settings_frame.pack(fill=tk.BOTH, expand=True)
@@ -324,15 +328,19 @@ class YTDlpDownloaderApp:
         help_text = "Must include %(title)s or %(id)s. Cannot contain / \\ .. or be an absolute path."
         ttk.Label(settings_frame, text=help_text, font=("TkDefaultFont", 8, "italic")).grid(row=2, column=1, sticky=tk.W, padx=5)
 
+        update_check_var = tk.BooleanVar(value=self.config.get('check_for_updates_on_startup', True))
+        update_check_button = ttk.Checkbutton(settings_frame, text="Check for updates on startup", variable=update_check_var)
+        update_check_button.grid(row=3, column=0, columnspan=2, sticky=tk.W, padx=5, pady=(10, 0))
+
         log_levels = ['DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL']
         self.log_level_var = tk.StringVar(value=self.config.get('log_level', 'INFO'))
-        ttk.Label(settings_frame, text="File Log Level:").grid(row=3, column=0, padx=5, pady=10, sticky=tk.W)
+        ttk.Label(settings_frame, text="File Log Level:").grid(row=4, column=0, padx=5, pady=10, sticky=tk.W)
         log_level_combo = ttk.Combobox(settings_frame, textvariable=self.log_level_var, values=log_levels, state="readonly", width=15)
-        log_level_combo.grid(row=3, column=1, padx=5, pady=10, sticky=tk.W)
+        log_level_combo.grid(row=4, column=1, padx=5, pady=10, sticky=tk.W)
         log_level_help = "Sets verbosity of latest.log. Requires restart to take effect."
-        ttk.Label(settings_frame, text=log_level_help, font=("TkDefaultFont", 8, "italic")).grid(row=4, column=1, sticky=tk.W, padx=5)
+        ttk.Label(settings_frame, text=log_level_help, font=("TkDefaultFont", 8, "italic")).grid(row=5, column=1, sticky=tk.W, padx=5)
         
-        update_frame = ttk.LabelFrame(settings_frame, text="Dependencies", padding=10); update_frame.grid(row=5, column=0, columnspan=2, sticky=tk.EW, pady=15); update_frame.columnconfigure(1, weight=1)
+        update_frame = ttk.LabelFrame(settings_frame, text="Dependencies", padding=10); update_frame.grid(row=6, column=0, columnspan=2, sticky=tk.EW, pady=15); update_frame.columnconfigure(1, weight=1)
         ttk.Label(update_frame, text="yt-dlp:").grid(row=0, column=0, sticky=tk.W, padx=5); ttk.Label(update_frame, textvariable=self.yt_dlp_version_var).grid(row=0, column=1, sticky=tk.W, padx=5); self.check_yt_dlp_version()
         ttk.Label(update_frame, text="FFmpeg:").grid(row=1, column=0, sticky=tk.W, padx=5); ttk.Label(update_frame, textvariable=self.ffmpeg_status_var, wraplength=400).grid(row=1, column=1, sticky=tk.W, padx=5); self.check_ffmpeg_status()
         update_buttons_frame = ttk.Frame(update_frame); update_buttons_frame.grid(row=2, column=0, columnspan=2, pady=(10,0))
@@ -364,6 +372,7 @@ class YTDlpDownloaderApp:
             self.config['max_concurrent_downloads'] = self.max_concurrent_downloads
             self.config['filename_template'] = self.filename_template.get()
             self.config['log_level'] = self.log_level_var.get()
+            self.config['check_for_updates_on_startup'] = update_check_var.get()
             self.config_manager.save(self.config)
             self.settings_win.destroy()
 
@@ -372,7 +381,7 @@ class YTDlpDownloaderApp:
                 self.settings_win.destroy()
         
         buttons_frame = ttk.Frame(settings_frame)
-        buttons_frame.grid(row=6, column=0, columnspan=2, pady=15, sticky=tk.E)
+        buttons_frame.grid(row=7, column=0, columnspan=2, pady=15, sticky=tk.E)
         ttk.Button(buttons_frame, text="Save", command=save_and_close).pack(side=tk.LEFT, padx=5)
         ttk.Button(buttons_frame, text="Cancel", command=cancel_and_close).pack(side=tk.LEFT)
         self.settings_win.protocol("WM_DELETE_WINDOW", cancel_and_close)
@@ -440,3 +449,43 @@ class YTDlpDownloaderApp:
             self.log_text.delete('1.0', f'{num_lines - self.MAX_LOG_LINES + 1}.0')
         self.log_text.see(tk.END)
         self.log_text.config(state='disabled')
+
+    def _show_update_dialog(self, new_version, release_url):
+        if self.update_dialog and self.update_dialog.winfo_exists():
+            return
+        
+        self.update_dialog = tk.Toplevel(self.root)
+        self.update_dialog.title("Update Available")
+        self.update_dialog.geometry("400x200")
+        self.update_dialog.resizable(False, False)
+        self.update_dialog.transient(self.root)
+
+        main_frame = ttk.Frame(self.update_dialog, padding="15"); main_frame.pack(fill=tk.BOTH, expand=True)
+        ttk.Label(main_frame, text="A new version is available!", font=("TkDefaultFont", 10, "bold")).pack(pady=(0, 10))
+        ttk.Label(main_frame, text=f"Current version: {__version__}").pack()
+        ttk.Label(main_frame, text=f"New version: {new_version}").pack(pady=(0, 15))
+
+        skip_var = tk.BooleanVar()
+        ttk.Checkbutton(main_frame, text="Don't remind me about this version again", variable=skip_var).pack(pady=5)
+
+        button_frame = ttk.Frame(main_frame); button_frame.pack(fill=tk.X, pady=10)
+
+        def go_to_download():
+            threading.Thread(target=webbrowser.open, args=(release_url,), daemon=True).start()
+            dismiss_and_save()
+        
+        def dismiss_and_save():
+            if not self.update_dialog:
+                return
+            if skip_var.get():
+                self.config['skipped_update_version'] = new_version
+                self.config_manager.save(self.config)
+            self.update_dialog.destroy()
+            self.update_dialog = None
+
+        download_button = ttk.Button(button_frame, text="Go to Download Page", command=go_to_download); download_button.pack(side=tk.LEFT, expand=True, fill=tk.X, padx=(0, 5))
+        dismiss_button = ttk.Button(button_frame, text="Dismiss", command=dismiss_and_save); dismiss_button.pack(side=tk.RIGHT, expand=True, fill=tk.X, padx=(5, 0))
+
+        self.update_dialog.protocol("WM_DELETE_WINDOW", dismiss_and_save)
+        self.update_dialog.grab_set()
+        self.root.wait_window(self.update_dialog)

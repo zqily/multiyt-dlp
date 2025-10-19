@@ -43,3 +43,8 @@ REQUEST_HEADERS = {
     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
 }
 REQUEST_TIMEOUTS = (10, 60)  # (connect_timeout, read_timeout)
+
+# --- Application Update Checker ---
+GITHUB_OWNER = 'zqily'
+GITHUB_REPO = 'multiyt-dlp'
+GITHUB_API_URL = f'https://api.github.com/repos/{GITHUB_OWNER}/{GITHUB_REPO}/releases/latest'

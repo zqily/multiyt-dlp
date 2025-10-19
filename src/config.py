@@ -14,7 +14,8 @@ class ConfigManager:
             'download_type': 'video', 'video_resolution': '1080', 'audio_format': 'mp3',
             'embed_thumbnail': True, 'filename_template': '%(title).100s [%(id)s].%(ext)s',
             'max_concurrent_downloads': 4, 'last_output_path': os.path.expanduser("~"),
-            'log_level': 'INFO'
+            'log_level': 'INFO', 'check_for_updates_on_startup': True,
+            'skipped_update_version': ''
         }
         # Ensure the configuration directory exists
         os.makedirs(os.path.dirname(config_path), exist_ok=True)
@@ -75,3 +76,10 @@ class ConfigManager:
         
         if not os.path.isdir(config.get('last_output_path', '')):
             config['last_output_path'] = self.defaults['last_output_path']
+        
+        if not isinstance(config.get('check_for_updates_on_startup'), bool):
+            self.logger.warning(f"Invalid check_for_updates_on_startup '{config.get('check_for_updates_on_startup')}'. Reverting to default.")
+            config['check_for_updates_on_startup'] = self.defaults['check_for_updates_on_startup']
+
+        if not isinstance(config.get('skipped_update_version'), str):
+            config['skipped_update_version'] = self.defaults['skipped_update_version']
