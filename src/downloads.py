@@ -205,7 +205,7 @@ class DownloadManager:
                 finally:
                     self.job_queue.task_done()
             except queue.Empty:
-                break
+                continue
 
     def _run_download_process(self, job_id, url, options):
         error_message, final_status = None, 'Failed'

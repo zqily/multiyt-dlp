@@ -56,7 +56,7 @@ def setup_logging(gui_queue: queue.Queue, file_log_level_str: str = 'INFO'):
     # QueueHandler does not need a formatter, as it passes the raw LogRecord
     # to the queue for the GUI thread to format.
     queue_handler = logging.handlers.QueueHandler(gui_queue)
-    queue_handler.setLevel(logging.INFO) # Only show INFO and above in the GUI
+    queue_handler.setLevel(logging.DEBUG)
     root_logger.addHandler(queue_handler)
 
     logging.info("--- Logging initialized ---")
