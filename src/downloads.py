@@ -9,7 +9,9 @@ import uuid
 import signal
 import logging
 
-from .constants import SUBPROCESS_CREATION_FLAGS
+from .constants import SUBPROCESS_CREATION_FLAGS, TEMP_DOWNLOAD_DIR
+from .url_extractor import URLInfoExtractor
+from .exceptions import URLExtractionError, DownloadCancelledError
 
 class DownloadManager:
     """Manages the download queue, worker threads, and yt-dlp processes."""
@@ -63,7 +65,8 @@ class DownloadManager:
             self.logger.error("yt-dlp path is not set. Cannot add jobs.")
             return
         self.logger.info(f"Retrying {len(urls)} failed download(s).")
-        with self.stats_lock: self.total_jobs += len(urls)
+        with self.stats_lock:
+            self.total_jobs += len(urls)
         for video_url in urls:
             if self.stop_event.is_set(): break
             job_id = str(uuid.uuid4())
@@ -122,75 +125,73 @@ class DownloadManager:
         self.gui_queue.put(('reset_progress', None))
 
     def _url_processor_worker(self):
+        if not self.yt_dlp_path:
+            self.logger.critical("URL processor started without a valid yt-dlp path. Aborting worker.")
+            return
+        extractor = URLInfoExtractor(self.yt_dlp_path, self.stop_event)
         while not self.stop_event.is_set():
             try:
                 url, options = self.url_processing_queue.get(timeout=1)
+                thread_name = threading.current_thread().name
                 try:
-                    self.logger.info(f"[{threading.current_thread().name}] Started processing: {url}")
-                    self._expand_url_and_queue_jobs(url, options)
-                    self.logger.info(f"[{threading.current_thread().name}] Finished processing: {url}")
+                    self.logger.info(f"[{thread_name}] Started processing: {url}")
+                    videos_to_queue, was_partial = extractor.extract_videos(url)
+                    
+                    if videos_to_queue:
+                        self.logger.info(f"[{thread_name}] Found {len(videos_to_queue)} video(s) for '{url}'.")
+                        for video in videos_to_queue:
+                            if self.stop_event.is_set(): break
+                            job_id = str(uuid.uuid4())
+                            with self.stats_lock:
+                                self.total_jobs += 1
+                            self.gui_queue.put(('add_job', (job_id, video['url'], "Queued", "0%")))
+                            self.job_queue.put((job_id, video['url'], options.copy()))
+
+                    if was_partial:
+                        self.logger.warning(f"[{thread_name}] Playlist expansion for '{url}' was incomplete or failed.")
+                        job_id = str(uuid.uuid4())
+                        self.gui_queue.put(('add_job', (job_id, url, "Error: Incomplete playlist", "N/A")))
+                        self.gui_queue.put(('done', (job_id, "Failed")))
+
+                except DownloadCancelledError:
+                    self.logger.info(f"[{thread_name}] URL processing for '{url}' was cancelled.")
+                except URLExtractionError as e:
+                    self.logger.error(f"[{thread_name}] Failed to process '{url}': {e}")
+                    job_id = str(uuid.uuid4())
+                    self.gui_queue.put(('add_job', (job_id, url, f"Error: {e}", "N/A")))
+                    self.gui_queue.put(('done', (job_id, "Failed")))
                 except Exception:
-                    # This broad catch is acceptable here to ensure one bad URL
-                    # doesn't kill the resilient processor thread.
-                    self.logger.exception(f"[{threading.current_thread().name}] Unhandled error processing URL: {url}")
+                    self.logger.exception(f"[{thread_name}] Unhandled error processing URL: {url}")
                 finally:
                     self.url_processing_queue.task_done()
             except queue.Empty:
                 break
 
-    def _expand_url_and_queue_jobs(self, url, options):
-        try:
-            command = [self.yt_dlp_path, '--flat-playlist', '--print-json', '--no-warnings', url]
-            kwargs = {'text': True, 'encoding': 'utf-8', 'errors': 'replace'}
-            if sys.platform == 'win32':
-                kwargs['creationflags'] = SUBPROCESS_CREATION_FLAGS
-            json_output = subprocess.check_output(command, **kwargs)
-            video_count = 0
-            for line in json_output.strip().split('\n'):
-                if self.stop_event.is_set(): break
-                try:
-                    video_info = json.loads(line)
-                    video_url = video_info.get('webpage_url') or video_info.get('url')
-                    if video_url:
-                        video_count += 1
-                        job_id = str(uuid.uuid4())
-                        with self.stats_lock: self.total_jobs += 1
-                        self.gui_queue.put(('add_job', (job_id, video_url, "Queued", "0%")))
-                        self.job_queue.put((job_id, video_url, options.copy()))
-                except json.JSONDecodeError:
-                    self.logger.warning(f"[URL_Processor] Could not parse line: {line}")
-            if video_count > 0: self.logger.info(f"Found and queued {video_count} video(s) for {url}.")
-            elif not self.stop_event.is_set(): self.logger.warning(f"No videos found for URL {url}")
-        except subprocess.CalledProcessError as e:
-            error_output = e.output.strip() if e.output else "No output from yt-dlp."
-            self.logger.error(f"yt-dlp failed to expand '{url}'. Output: {error_output}")
-            self.logger.info(f"Assuming '{url}' is a single video and queuing it directly.")
-            if not self.stop_event.is_set():
-                job_id = str(uuid.uuid4())
-                with self.stats_lock: self.total_jobs += 1
-                self.gui_queue.put(('add_job', (job_id, url, "Queued", "0%")))
-                self.job_queue.put((job_id, url, options.copy()))
-
-    def cleanup_temporary_files(self, path=None):
-        """Cleans up temporary download files in a given directory."""
-        cleanup_path = path or self.current_output_path
-        if not cleanup_path or not os.path.isdir(cleanup_path): return
+    def cleanup_temporary_files(self):
+        """Cleans up temporary download files in the dedicated temp directory."""
+        cleanup_path = TEMP_DOWNLOAD_DIR
+        if not os.path.isdir(cleanup_path): return
         temp_extensions, count = {".part", ".ytdl", ".webm"}, 0
         self.logger.info(f"Scanning '{cleanup_path}' for temp files...")
         try:
             for filename in os.listdir(cleanup_path):
                 if any(filename.endswith(ext) for ext in temp_extensions):
-                    try: os.remove(os.path.join(cleanup_path, filename)); count += 1
-                    except OSError as e: self.logger.error(f"  - Error deleting {filename}: {e}")
+                    try:
+                        os.remove(os.path.join(cleanup_path, filename))
+                        count += 1
+                    except OSError as e:
+                        self.logger.error(f"  - Error deleting {filename}: {e}")
         except OSError as e:
             self.logger.error(f"Error scanning directory '{cleanup_path}': {e}")
-        if count > 0: self.logger.info(f"Cleanup complete. Deleted {count} temporary file(s).")
+        if count > 0:
+            self.logger.info(f"Cleanup complete. Deleted {count} temporary file(s).")
 
     def _start_workers(self):
         self.workers = [w for w in self.workers if w.is_alive()]
         for _ in range(self.max_concurrent_downloads - len(self.workers)):
             worker = threading.Thread(target=self._worker_thread, daemon=True, name=f"Download-Worker-{len(self.workers) + 1}")
-            self.workers.append(worker); worker.start()
+            self.workers.append(worker)
+            worker.start()
 
     def _worker_thread(self):
         while not self.stop_event.is_set():
@@ -207,23 +208,44 @@ class DownloadManager:
             except queue.Empty:
                 continue
 
+    def _build_yt_dlp_command(self, url, options):
+        """Builds the full yt-dlp command list based on options."""
+        command = [
+            self.yt_dlp_path,
+            '--newline',
+            '--progress-template', 'PROGRESS::%(progress._percent_str)s',
+            '--no-mtime',
+            '--paths', f'temp:{TEMP_DOWNLOAD_DIR}',
+            '-o', os.path.join(options['output_path'], options['filename_template'])
+        ]
+
+        if self.ffmpeg_path:
+            command.extend(['--ffmpeg-location', os.path.dirname(self.ffmpeg_path)])
+
+        if options['download_type'] == 'video':
+            res = options['video_resolution']
+            f_str = 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best'
+            if res.lower() != 'best':
+                f_str = f'bestvideo[height<={res}][ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best[height<={res}]'
+            command.extend(['-f', f_str])
+        elif options['download_type'] == 'audio':
+            audio_format = options['audio_format']
+            command.extend(['-f', 'bestaudio/best', '-x'])
+            if audio_format != 'best':
+                command.extend(['--audio-format', audio_format])
+                if audio_format == 'mp3':
+                    command.extend(['--audio-quality', '192K'])
+
+        if options['embed_thumbnail']:
+            command.append('--embed-thumbnail')
+
+        command.append(url)
+        return command
+
     def _run_download_process(self, job_id, url, options):
         error_message, final_status = None, 'Failed'
         try:
-            command = [self.yt_dlp_path, '--newline', '--progress-template', 'PROGRESS::%(progress._percent_str)s', '--no-mtime', '-o', os.path.join(options['output_path'], options['filename_template'])]
-            if self.ffmpeg_path: command.extend(['--ffmpeg-location', os.path.dirname(self.ffmpeg_path)])
-            if options['download_type'] == 'video':
-                res, f_str = options['video_resolution'], 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best'
-                if res.lower() != 'best': f_str = f'bestvideo[height<={res}][ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best[height<={res}]'
-                command.extend(['-f', f_str])
-            elif options['download_type'] == 'audio':
-                audio_format = options['audio_format']
-                command.extend(['-f', 'bestaudio/best', '-x'])
-                if audio_format != 'best':
-                    command.extend(['--audio-format', audio_format])
-                    if audio_format == 'mp3': command.extend(['--audio-quality', '192K'])
-            if options['embed_thumbnail']: command.append('--embed-thumbnail')
-            command.append(url)
+            command = self._build_yt_dlp_command(url, options)
             
             popen_kwargs = {'stdout': subprocess.PIPE, 'stderr': subprocess.STDOUT, 'text': True, 'encoding': 'utf-8', 'errors': 'replace', 'bufsize': 1}
             if sys.platform == 'win32':

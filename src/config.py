@@ -85,3 +85,7 @@ class ConfigManager:
 
         if not isinstance(config.get('skipped_update_version'), str):
             config['skipped_update_version'] = self.defaults['skipped_update_version']
+
+        if not isinstance(config.get('embed_thumbnail'), bool):
+            self.logger.warning(f"Invalid embed_thumbnail '{config.get('embed_thumbnail')}'. Reverting to default.")
+            config['embed_thumbnail'] = self.defaults['embed_thumbnail']

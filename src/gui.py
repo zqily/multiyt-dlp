@@ -50,6 +50,8 @@ class YTDlpDownloaderApp:
             self.root.after(2000, self.app_updater.check_for_updates)
         
         self.create_widgets()
+        # Perform cleanup on startup to remove any orphaned temp files
+        self.download_manager.cleanup_temporary_files()
         self.logger.info(f"Config path: {CONFIG_FILE}")
         self.logger.info(f"Found yt-dlp: {self.dep_manager.yt_dlp_path or 'Not Found'}")
         self.logger.info(f"Found FFmpeg: {self.dep_manager.ffmpeg_path or 'Not Found'}")
@@ -68,8 +70,6 @@ class YTDlpDownloaderApp:
         self.logger.info("Application closing.")
         if self.is_downloading:
             self.download_manager.stop_all_downloads()
-        else:
-            self.download_manager.cleanup_temporary_files(self.output_path_var.get())
 
         self.config.update({
             'download_type': self.download_type_var.get(), 'video_resolution': self.video_resolution_var.get(),
@@ -97,6 +97,10 @@ class YTDlpDownloaderApp:
         ttk.Radiobutton(self.options_frame, text="Audio", variable=self.download_type_var, value="audio").pack(side=tk.LEFT, padx=10)
         self.dynamic_options_frame = ttk.Frame(self.options_frame); self.dynamic_options_frame.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=20)
         
+        self.embed_thumbnail_var = tk.BooleanVar(value=self.config.get('embed_thumbnail'))
+        self.thumbnail_check = ttk.Checkbutton(self.options_frame, text="Embed Thumbnail", variable=self.embed_thumbnail_var)
+        self.thumbnail_check.pack(side=tk.LEFT, padx=10)
+
         self.video_options_frame = ttk.Frame(self.dynamic_options_frame)
         ttk.Label(self.video_options_frame, text="Resolution:").pack(side=tk.LEFT, padx=(0, 5)); self.video_resolution_var = tk.StringVar(value=self.config.get('video_resolution'))
         self.video_resolution_combo = ttk.Combobox(self.video_options_frame, textvariable=self.video_resolution_var, values=["Best", "1080", "720", "480"], state="readonly", width=10); self.video_resolution_combo.pack(side=tk.LEFT)
@@ -104,7 +108,6 @@ class YTDlpDownloaderApp:
         self.audio_options_frame = ttk.Frame(self.dynamic_options_frame)
         ttk.Label(self.audio_options_frame, text="Format:").pack(side=tk.LEFT, padx=(0, 5)); self.audio_format_var = tk.StringVar(value=self.config.get('audio_format'))
         self.audio_format_combo = ttk.Combobox(self.audio_options_frame, textvariable=self.audio_format_var, values=["best", "mp3", "m4a", "flac", "wav"], state="readonly", width=10); self.audio_format_combo.pack(side=tk.LEFT, padx=(0, 20))
-        self.embed_thumbnail_var = tk.BooleanVar(value=self.config.get('embed_thumbnail')); self.thumbnail_check = ttk.Checkbutton(self.audio_options_frame, text="Embed Thumbnail", variable=self.embed_thumbnail_var); self.thumbnail_check.pack(side=tk.LEFT)
         self.update_options_ui()
 
         action_frame = ttk.Frame(main_frame); action_frame.pack(fill=tk.X, pady=10); action_frame.columnconfigure(0, weight=1)
@@ -172,7 +175,7 @@ class YTDlpDownloaderApp:
         
         options = {'output_path': output_path, 'filename_template': self.filename_template.get(), 'download_type': self.download_type_var.get(), 'video_resolution': self.video_resolution_var.get(), 'audio_format': self.audio_format_var.get(), 'embed_thumbnail': self.embed_thumbnail_var.get()}
         
-        if self.download_type_var.get() == 'audio' and not self.dep_manager.ffmpeg_path:
+        if self.download_type_var.get() == 'audio' and options['embed_thumbnail'] and not self.dep_manager.ffmpeg_path:
             self.pending_download_task = (valid_urls, options)
             self.url_text.delete(1.0, tk.END)
             self.logger.info("FFmpeg is required. Attempting to download it now...")

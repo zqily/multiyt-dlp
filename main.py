@@ -2,10 +2,11 @@ import tkinter as tk
 import queue
 import sys
 import logging
+import os
 from src.gui import YTDlpDownloaderApp
 from src.logging_config import setup_logging
 from src.config import ConfigManager
-from src.constants import CONFIG_FILE
+from src.constants import CONFIG_FILE, TEMP_DOWNLOAD_DIR
 
 def handle_exception(exc_type, exc_value, exc_traceback):
     """Logs unhandled exceptions."""
@@ -20,6 +21,9 @@ if __name__ == "__main__":
     """
     Main entry point for the application.
     """
+    # Ensure temp directory exists before anything else
+    os.makedirs(TEMP_DOWNLOAD_DIR, exist_ok=True)
+    
     # Load configuration before setting up logging
     gui_queue = queue.Queue()
     config_manager = ConfigManager(CONFIG_FILE)

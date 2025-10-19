@@ -15,6 +15,7 @@ else:
 USER_DATA_DIR = os.path.join(os.path.expanduser('~'), '.multiyt-dlp')
 CONFIG_FILE = os.path.join(USER_DATA_DIR, 'config.json')
 LOG_DIR = os.path.join(USER_DATA_DIR, 'logs')
+TEMP_DOWNLOAD_DIR = os.path.join(USER_DATA_DIR, 'temp_downloads')
 
 # Centralize subprocess creation flags to avoid console windows on Windows.
 SUBPROCESS_CREATION_FLAGS = subprocess.CREATE_NO_WINDOW if sys.platform == 'win32' else 0
