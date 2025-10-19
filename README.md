@@ -46,7 +46,7 @@ A user-friendly graphical interface for the powerful command-line tool `yt-dlp`.
 
 As I only build for Windows, macOS and Linux users will need to run the application from the source code.
 
-1.  **Ensure you have Python 3.x installed.**
+1.  **Ensure you have Python 3.8+ installed.**
 2.  Follow the instructions in the **[Running from Source](#%EF%B8%8F-running-from-source-advanced-users)** section below.
 
 ## ⚙️ Settings & Customization
