@@ -8,6 +8,7 @@ import urllib.parse
 import threading
 import logging
 import webbrowser
+import subprocess
 
 from ._version import __version__
 from .constants import CONFIG_FILE, resource_path
@@ -360,7 +361,7 @@ class YTDlpDownloaderApp:
             if not (1 <= new_concurrent_val <= 20): 
                 messagebox.showwarning("Invalid Value", "Concurrent downloads must be between 1 and 20.", parent=self.settings_win)
                 return
-            if not new_template or not re.search(r'%\((title|id)', new_template): 
+            if not new_template or not re.search(r'%\((?:title|id)\)', new_template): 
                 messagebox.showwarning("Invalid Template", "Template must include %(title)s or %(id)s.", parent=self.settings_win)
                 return
             if any(c in new_template for c in '/\\') or '..' in new_template or os.path.isabs(new_template): 
@@ -420,14 +421,14 @@ class YTDlpDownloaderApp:
         self.tree_context_menu.post(event.x_root, event.y_root)
 
     def open_output_folder(self):
-        import subprocess
         path = self.output_path_var.get()
         if not os.path.isdir(path): messagebox.showerror("Error", f"Folder does not exist:\n{path}"); return
         try:
             if sys.platform == 'win32': os.startfile(path)
             elif sys.platform == 'darwin': subprocess.run(['open', path], check=True)
             else: subprocess.run(['xdg-open', path], check=True)
-        except Exception as e: messagebox.showerror("Error", f"Failed to open folder:\n{e}")
+        except (OSError, subprocess.CalledProcessError) as e:
+            messagebox.showerror("Error", f"Failed to open folder:\n{e}")
 
     def retry_failed_download(self):
         to_retry = [(self.downloads_tree.item(item, 'values')[0], item) for item in self.downloads_tree.selection() if 'failed' in self.downloads_tree.item(item, 'tags')]

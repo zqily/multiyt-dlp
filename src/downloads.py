@@ -92,16 +92,26 @@ class DownloadManager:
             procs_to_terminate = list(self.active_processes.items())
         
         for job_id, process in procs_to_terminate:
-            self.logger.info(f"Stopping process for {job_id} (PID: {process.pid})...")
+            self.logger.info(f"Requesting graceful shutdown for {job_id} (PID: {process.pid})...")
             try:
                 if sys.platform == 'win32':
-                    subprocess.run(['taskkill', '/F', '/T', '/PID', str(process.pid)], stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False, creationflags=SUBPROCESS_CREATION_FLAGS)
+                    os.kill(process.pid, signal.CTRL_C_EVENT)
                 else:
-                    os.killpg(os.getpgid(process.pid), signal.SIGTERM)
-            except Exception as e:
-                self.logger.error(f"Platform-specific kill for {job_id} failed: {e}. Attempting process.terminate().")
-                try: process.terminate()
-                except Exception as term_e: self.logger.error(f"process.terminate() also failed: {term_e}")
+                    # os.setsid makes the process a group leader, so we can kill the whole group
+                    os.killpg(os.getpgid(process.pid), signal.SIGINT)
+                
+                process.wait(timeout=10)
+                self.logger.info(f"Process {job_id} (PID: {process.pid}) terminated gracefully.")
+            except (subprocess.TimeoutExpired, OSError, ProcessLookupError) as e:
+                self.logger.warning(f"Graceful shutdown for {job_id} failed: {e}. Forcing termination...")
+                try:
+                    # Fallback to forceful termination
+                    if sys.platform == 'win32':
+                        subprocess.run(['taskkill', '/F', '/T', '/PID', str(process.pid)], stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False, creationflags=SUBPROCESS_CREATION_FLAGS)
+                    else:
+                        os.killpg(os.getpgid(process.pid), signal.SIGTERM) # SIGTERM is less abrupt than SIGKILL
+                except Exception as kill_e:
+                    self.logger.error(f"Forceful termination for {job_id} also failed: {kill_e}")
             
             self.gui_queue.put(('done', (job_id, 'Cancelled')))
             with self.active_processes_lock:
@@ -120,8 +130,9 @@ class DownloadManager:
                     self._expand_url_and_queue_jobs(url, options)
                     self.logger.info(f"[{threading.current_thread().name}] Finished processing: {url}")
                 except Exception:
-                    url_str = url if url else "an unknown URL"
-                    self.logger.exception(f"[{threading.current_thread().name}] Error processing {url_str}")
+                    # This broad catch is acceptable here to ensure one bad URL
+                    # doesn't kill the resilient processor thread.
+                    self.logger.exception(f"[{threading.current_thread().name}] Unhandled error processing URL: {url}")
                 finally:
                     self.url_processing_queue.task_done()
             except queue.Empty:
@@ -159,8 +170,6 @@ class DownloadManager:
                 with self.stats_lock: self.total_jobs += 1
                 self.gui_queue.put(('add_job', (job_id, url, "Queued", "0%")))
                 self.job_queue.put((job_id, url, options.copy()))
-        except Exception:
-            self.logger.exception(f"An error occurred while processing {url}")
 
     def cleanup_temporary_files(self, path=None):
         """Cleans up temporary download files in a given directory."""
@@ -218,7 +227,7 @@ class DownloadManager:
             
             popen_kwargs = {'stdout': subprocess.PIPE, 'stderr': subprocess.STDOUT, 'text': True, 'encoding': 'utf-8', 'errors': 'replace', 'bufsize': 1}
             if sys.platform == 'win32':
-                popen_kwargs['creationflags'] = SUBPROCESS_CREATION_FLAGS
+                popen_kwargs['creationflags'] = SUBPROCESS_CREATION_FLAGS | subprocess.CREATE_NEW_PROCESS_GROUP
             else:
                 popen_kwargs['preexec_fn'] = os.setsid
             
@@ -255,8 +264,11 @@ class DownloadManager:
             if self.stop_event.is_set(): return
             if return_code == 0: final_status = 'Completed'
             elif error_message: final_status = f"Failed: {error_message[:60]}"
+        except FileNotFoundError:
+            final_status, error_message = "Error", "yt-dlp executable not found"
+            self.logger.error(f"[{job_id}] yt-dlp executable not found at {self.yt_dlp_path}")
         except Exception:
-            final_status, error_message = "Error", "An exception occurred"
+            final_status, error_message = "Error", "An unexpected exception occurred"
             self.logger.exception(f"[{job_id}] Exception occurred during download process")
         finally:
             with self.active_processes_lock:

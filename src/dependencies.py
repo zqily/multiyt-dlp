@@ -10,7 +10,7 @@ import time
 import tempfile
 import queue
 import logging
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor, as_completed, wait
 import requests
 
 from .constants import (
@@ -60,19 +60,21 @@ class DependencyManager:
         if not executable_path or not os.path.exists(executable_path): return "Not found"
         try:
             command = [executable_path, '-version'] if 'ffmpeg' in os.path.basename(executable_path).lower() else [executable_path, '--version']
-            kwargs = {'text': True, 'stderr': subprocess.STDOUT}
+            kwargs = {'text': True, 'encoding': 'utf-8', 'errors': 'replace', 'stderr': subprocess.STDOUT}
             if sys.platform == 'win32':
                 kwargs['creationflags'] = SUBPROCESS_CREATION_FLAGS
-            result = subprocess.check_output(command, **kwargs)
+            result = subprocess.check_output(command, timeout=15, **kwargs)
             return result.strip().split('\n')[0]
-        except FileNotFoundError:
-            return "Not found"
-        except PermissionError:
-            return "Permission error"
-        except subprocess.CalledProcessError:
+        except (FileNotFoundError, PermissionError):
+            return "Not found or no permission"
+        except subprocess.TimeoutExpired:
+            self.logger.warning(f"Version check for {executable_path} timed out.")
+            return "Version check timed out"
+        except (subprocess.CalledProcessError, OSError) as e:
+            self.logger.error(f"Error checking version for {executable_path}: {e}")
             return "Cannot execute"
         except Exception:
-            self.logger.exception(f"Error checking version for {executable_path}")
+            self.logger.exception(f"Unexpected error checking version for {executable_path}")
             return "Error checking version"
 
     def _download_file_with_progress(self, url, save_path, dep_type):
@@ -94,7 +96,7 @@ class DependencyManager:
             try:
                 self.logger.info(f"Starting chunked download for {dep_type} ({total_size/1024/1024:.1f} MB)...")
                 self._download_file_chunked(url, save_path, total_size, dep_type)
-            except Exception as e:
+            except (requests.exceptions.RequestException, IOError) as e:
                 if isinstance(e, DownloadCancelledError): raise
                 self.logger.exception(f"Chunked download failed: {e}. Falling back to single-stream.")
                 if os.path.exists(save_path):
@@ -107,8 +109,6 @@ class DependencyManager:
             if total_size > 0 and not supports_ranges: log_msg += " (Server doesn't support ranged requests)"
             self.logger.info(log_msg)
             self._download_file_single_stream(url, save_path, dep_type)
-
-        if self.stop_event.is_set(): raise DownloadCancelledError("Download cancelled after completion.")
 
         self.gui_queue.put(('dependency_progress', {
             'type': dep_type, 'status': 'determinate',
@@ -153,18 +153,28 @@ class DependencyManager:
             progress, progress_lock, start_time = [0] * self.DOWNLOAD_CHUNKS, threading.Lock(), time.time()
             with ThreadPoolExecutor(max_workers=self.DOWNLOAD_CHUNKS) as executor:
                 futures = {executor.submit(self._download_chunk, url, os.path.join(temp_dir, f'chunk_{i}'), ranges[i], i, progress, progress_lock) for i in range(self.DOWNLOAD_CHUNKS)}
-                while any(f.running() for f in futures):
-                    if self.stop_event.is_set(): break
+                
+                # Main loop for progress updates and cancellation check
+                while True:
+                    _, not_done = wait(futures, timeout=0.5)
+                    
                     with progress_lock: bytes_downloaded = sum(progress)
                     if total_size > 0:
                         percent = (bytes_downloaded / total_size) * 100
                         speed = (bytes_downloaded / (time.time() - start_time)) / 1024 / 1024 if time.time() > start_time else 0
                         text = f'Downloading... {bytes_downloaded/1024/1024:.1f}/{total_size/1024/1024:.1f} MB ({speed:.1f} MB/s)'
                         self.gui_queue.put(('dependency_progress', {'type': dep_type, 'status': 'determinate', 'text': text, 'value': percent}))
-                    time.sleep(0.5)
-                for future in as_completed(futures): future.result()
+
+                    if self.stop_event.is_set(): break
+                    if not not_done: break # All futures are complete
+
+                # Check results of all futures to propagate exceptions
+                for future in as_completed(futures):
+                    try: future.result()
+                    except DownloadCancelledError: pass # Expected during cancellation
             
             if self.stop_event.is_set(): raise DownloadCancelledError("Download cancelled before file assembly.")
+
             self.gui_queue.put(('dependency_progress', {'type': dep_type, 'status': 'indeterminate', 'text': 'Assembling file...'}))
             self._assemble_chunks(save_path, temp_dir)
 
@@ -188,7 +198,7 @@ class DependencyManager:
             except requests.exceptions.RequestException as e:
                 self.logger.error(f"Error on chunk {chunk_idx}, attempt {attempt + 1}: {e}")
                 if attempt < self.DOWNLOAD_RETRY_ATTEMPTS - 1: time.sleep(2 ** attempt)
-                else: raise Exception(f"Failed to download chunk {chunk_idx}.") from e
+                else: raise e
 
     def _assemble_chunks(self, save_path, temp_dir):
         with open(save_path, 'wb') as f_out:
@@ -219,9 +229,12 @@ class DependencyManager:
         except requests.exceptions.RequestException as e:
             self.logger.exception("Network error during yt-dlp download.")
             self.gui_queue.put(('dependency_done', {'type': 'yt-dlp', 'success': False, 'error': f"Network error: {e}"}))
-        except Exception:
+        except (IOError, OSError) as e:
+            self.logger.exception("File system error during yt-dlp installation.")
+            self.gui_queue.put(('dependency_done', {'type': 'yt-dlp', 'success': False, 'error': f"File error: {e}"}))
+        except Exception as e:
             self.logger.exception("An unexpected error occurred during yt-dlp download.")
-            self.gui_queue.put(('dependency_done', {'type': 'yt-dlp', 'success': False, 'error': "An unexpected error occurred."}))
+            self.gui_queue.put(('dependency_done', {'type': 'yt-dlp', 'success': False, 'error': f"An unexpected error occurred: {e}"}))
 
     def download_ffmpeg(self):
         threading.Thread(target=self._download_ffmpeg_thread, daemon=True, name="FFmpeg-Installer").start()
@@ -264,6 +277,12 @@ class DependencyManager:
             except requests.exceptions.RequestException as e:
                 self.logger.exception("Network error during FFmpeg download.")
                 self.gui_queue.put(('dependency_done', {'type': 'ffmpeg', 'success': False, 'error': f"Network error: {e}"}))
-            except Exception:
+            except (zipfile.BadZipFile, tarfile.ReadError) as e:
+                self.logger.exception("Error extracting FFmpeg archive.")
+                self.gui_queue.put(('dependency_done', {'type': 'ffmpeg', 'success': False, 'error': f"Archive error: {e}"}))
+            except (FileNotFoundError, IOError, OSError) as e:
+                self.logger.exception("File system error during FFmpeg installation.")
+                self.gui_queue.put(('dependency_done', {'type': 'ffmpeg', 'success': False, 'error': f"File error: {e}"}))
+            except Exception as e:
                 self.logger.exception("An unexpected error occurred during FFmpeg download.")
-                self.gui_queue.put(('dependency_done', {'type': 'ffmpeg', 'success': False, 'error': "An unexpected error occurred."}))
+                self.gui_queue.put(('dependency_done', {'type': 'ffmpeg', 'success': False, 'error': f"An unexpected error occurred: {e}"}))

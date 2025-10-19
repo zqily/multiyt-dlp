@@ -18,7 +18,9 @@ class ConfigManager:
             'skipped_update_version': ''
         }
         # Ensure the configuration directory exists
-        os.makedirs(os.path.dirname(config_path), exist_ok=True)
+        config_dir = os.path.dirname(self.config_path)
+        if config_dir:
+            os.makedirs(config_dir, exist_ok=True)
 
     def load(self):
         """Loads config, merges with defaults, validates, and returns it."""
@@ -66,7 +68,7 @@ class ConfigManager:
         template = config.get('filename_template', '')
         is_invalid = (
             not template or
-            not re.search(r'%\((title|id)', template) or
+            not re.search(r'%\((?:title|id)\)', template) or
             '/' in template or '\\' in template or '..' in template or
             os.path.isabs(template)
         )

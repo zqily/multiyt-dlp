@@ -60,10 +60,12 @@ class AppUpdater:
                     'url': release_url
                 }))
 
-        except InvalidVersion:
-            self.logger.warning(f"Could not parse version string from GitHub: '{latest_version_str}'")
         except requests.exceptions.RequestException as e:
-            status_code = f" (Status: {e.response.status_code})" if e.response else ""
+            status_code = f" (Status: {e.response.status_code})" if hasattr(e, 'response') and e.response is not None else ""
             self.logger.warning(f"Failed to check for updates (network error): {e}{status_code}")
+        except (InvalidVersion, KeyError, TypeError) as e:
+            self.logger.warning(f"Could not parse API response from GitHub: {e}")
+            if latest_version_str:
+                self.logger.warning(f"Version string was: '{latest_version_str}'")
         except Exception:
             self.logger.exception("An unexpected error occurred during update check.")
