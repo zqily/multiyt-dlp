@@ -7,15 +7,14 @@ import re
 import threading
 import queue
 import subprocess
-import urllib.request
-import urllib.error
+import requests
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import urllib.parse
 import zipfile
 import tarfile
 import json
 import uuid
 import time
-import socket
 import tempfile
 import signal
 
@@ -55,7 +54,7 @@ FFMPEG_URLS = {
 REQUEST_HEADERS = {
     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
 }
-URL_TIMEOUT = 30
+REQUEST_TIMEOUTS = (10, 60)  # (connect_timeout, read_timeout)
 
 # --- Configuration Management ---
 
@@ -122,10 +121,24 @@ class ConfigManager:
 
 class DependencyManager:
     """Manages the discovery, download, and updates for yt-dlp and FFmpeg."""
+    CHUNKED_DOWNLOAD_THRESHOLD = 20 * 1024 * 1024  # 20 MB
+    DOWNLOAD_CHUNKS = 8
+    DOWNLOAD_RETRY_ATTEMPTS = 3
+
+    class CancelledError(Exception):
+        """Custom exception for cancelled downloads."""
+        pass
+
     def __init__(self, gui_queue):
         self.gui_queue = gui_queue
         self.yt_dlp_path = self.find_yt_dlp()
         self.ffmpeg_path = self.find_ffmpeg()
+        self.stop_event = threading.Event()
+
+    def cancel_download(self):
+        """Signals the download process to stop."""
+        self.gui_queue.put(('log', "Cancellation signal sent to dependency downloader."))
+        self.stop_event.set()
 
     def find_yt_dlp(self):
         self.yt_dlp_path = self._find_executable('yt-dlp')
@@ -166,46 +179,131 @@ class DependencyManager:
             return "Error checking version"
 
     def _download_file_with_progress(self, url, save_path, dep_type):
-        max_retries = 3
-        for attempt in range(max_retries):
+        self.gui_queue.put(('dependency_progress', {'type': dep_type, 'status': 'determinate', 'text': 'Preparing download...', 'value': 0}))
+        
+        total_size = 0
+        supports_ranges = False
+        try:
+            with requests.head(url, headers=REQUEST_HEADERS, timeout=REQUEST_TIMEOUTS[0], allow_redirects=True) as r:
+                r.raise_for_status()
+                total_size = int(r.headers.get('content-length', 0))
+                supports_ranges = r.headers.get('accept-ranges', '').lower() == 'bytes'
+        except requests.exceptions.RequestException as e:
+            self.gui_queue.put(('log', f"HEAD request failed: {e}. Proceeding with single-stream download."))
+
+        use_chunked = total_size > self.CHUNKED_DOWNLOAD_THRESHOLD and supports_ranges
+        
+        if use_chunked:
             try:
-                text = f'Preparing download (Attempt {attempt + 1}/{max_retries})...'
-                self.gui_queue.put(('dependency_progress', {'type': dep_type, 'status': 'determinate', 'text': text, 'value': 0}))
-                req = urllib.request.Request(url, headers=REQUEST_HEADERS)
-                with urllib.request.urlopen(req, timeout=URL_TIMEOUT) as response:
-                    total_size = int(response.getheader('Content-Length', 0))
+                self.gui_queue.put(('log', f"Starting chunked download for {dep_type} ({total_size/1024/1024:.1f} MB)..."))
+                self._download_file_chunked(url, save_path, total_size, dep_type)
+            except Exception as e:
+                if isinstance(e, self.CancelledError): raise
+                self.gui_queue.put(('log', f"Chunked download failed: {e}. Falling back to single-stream."))
+                if os.path.exists(save_path):
+                    try: os.remove(save_path)
+                    except OSError: pass
+                self._download_file_single_stream(url, save_path, dep_type)
+        else:
+            log_msg = f"Starting single-stream download for {dep_type}."
+            if total_size > 0 and total_size <= self.CHUNKED_DOWNLOAD_THRESHOLD: log_msg += " (File is small)"
+            if total_size > 0 and not supports_ranges: log_msg += " (Server doesn't support ranged requests)"
+            self.gui_queue.put(('log', log_msg))
+            self._download_file_single_stream(url, save_path, dep_type)
+
+        if self.stop_event.is_set(): raise self.CancelledError("Download cancelled after completion.")
+
+        self.gui_queue.put(('dependency_progress', {
+            'type': dep_type, 'status': 'determinate',
+            'text': 'Download complete. Preparing...', 'value': 100
+        }))
+
+    def _download_file_single_stream(self, url, save_path, dep_type):
+        for attempt in range(self.DOWNLOAD_RETRY_ATTEMPTS):
+            if self.stop_event.is_set(): raise self.CancelledError("Download cancelled before starting.")
+            try:
+                with requests.get(url, stream=True, headers=REQUEST_HEADERS, timeout=REQUEST_TIMEOUTS) as r:
+                    r.raise_for_status()
+                    total_size = int(r.headers.get('Content-Length', 0))
                     if total_size <= 0:
-                        text = f'Downloading {dep_type}... (Size unknown)'
-                        self.gui_queue.put(('dependency_progress', {'type': dep_type, 'status': 'indeterminate', 'text': text}))
-                    chunk_size, bytes_downloaded = 8192, 0
+                        self.gui_queue.put(('dependency_progress', {'type': dep_type, 'status': 'indeterminate', 'text': f'Downloading {dep_type}... (Size unknown)'}))
+                    
+                    bytes_downloaded, chunk_size = 0, 8192
+                    start_time = time.time()
                     with open(save_path, 'wb') as f_out:
-                        while True:
-                            chunk = response.read(chunk_size)
-                            if not chunk: break
+                        for chunk in r.iter_content(chunk_size=chunk_size):
+                            if self.stop_event.is_set(): raise self.CancelledError("Download cancelled during transfer.")
                             f_out.write(chunk)
                             bytes_downloaded += len(chunk)
                             if total_size > 0:
-                                progress_percent = (bytes_downloaded / total_size) * 100
-                                text = f'Downloading... {bytes_downloaded/1024/1024:.1f}/{total_size/1024/1024:.1f} MB'
-                                self.gui_queue.put(('dependency_progress', {'type': dep_type, 'status': 'determinate', 'text': text, 'value': progress_percent}))
-                self.gui_queue.put(('dependency_progress', {
-                    'type': dep_type, 'status': 'determinate', 
-                    'text': 'Download complete. Preparing...', 'value': 100
-                }))
-                return  # Success
-            except (urllib.error.URLError, socket.timeout) as e:
-                log_msg = f"Network error on attempt {attempt + 1} for {dep_type}: {e}"
-                self.gui_queue.put(('log', log_msg))
-                print(log_msg)
-                if attempt < max_retries - 1:
-                    time.sleep(2 ** attempt)
-                else:
-                    raise e
+                                progress = (bytes_downloaded / total_size) * 100
+                                speed = (bytes_downloaded / (time.time() - start_time)) / 1024 / 1024 if time.time() > start_time else 0
+                                text = f'Downloading... {bytes_downloaded/1024/1024:.1f}/{total_size/1024/1024:.1f} MB ({speed:.1f} MB/s)'
+                                self.gui_queue.put(('dependency_progress', {'type': dep_type, 'status': 'determinate', 'text': text, 'value': progress}))
+                return
+            except self.CancelledError: raise
+            except requests.exceptions.RequestException as e:
+                self.gui_queue.put(('log', f"Single-stream error on attempt {attempt + 1}: {e}"))
+                if attempt < self.DOWNLOAD_RETRY_ATTEMPTS - 1: time.sleep(2 ** attempt)
+                else: raise e
+    
+    def _download_file_chunked(self, url, save_path, total_size, dep_type):
+        chunk_size = total_size // self.DOWNLOAD_CHUNKS
+        ranges = [(i * chunk_size, (i + 1) * chunk_size - 1) for i in range(self.DOWNLOAD_CHUNKS - 1)]
+        ranges.append(((self.DOWNLOAD_CHUNKS - 1) * chunk_size, total_size - 1))
+
+        with tempfile.TemporaryDirectory(prefix="multiyt-dlp-") as temp_dir:
+            progress, progress_lock, start_time = [0] * self.DOWNLOAD_CHUNKS, threading.Lock(), time.time()
+            with ThreadPoolExecutor(max_workers=self.DOWNLOAD_CHUNKS) as executor:
+                futures = {executor.submit(self._download_chunk, url, os.path.join(temp_dir, f'chunk_{i}'), ranges[i], i, progress, progress_lock) for i in range(self.DOWNLOAD_CHUNKS)}
+                while any(f.running() for f in futures):
+                    if self.stop_event.is_set(): break
+                    with progress_lock: bytes_downloaded = sum(progress)
+                    if total_size > 0:
+                        percent = (bytes_downloaded / total_size) * 100
+                        speed = (bytes_downloaded / (time.time() - start_time)) / 1024 / 1024 if time.time() > start_time else 0
+                        text = f'Downloading... {bytes_downloaded/1024/1024:.1f}/{total_size/1024/1024:.1f} MB ({speed:.1f} MB/s)'
+                        self.gui_queue.put(('dependency_progress', {'type': dep_type, 'status': 'determinate', 'text': text, 'value': percent}))
+                    time.sleep(0.5)
+                for future in as_completed(futures): future.result()
+            
+            if self.stop_event.is_set(): raise self.CancelledError("Download cancelled before file assembly.")
+            self.gui_queue.put(('dependency_progress', {'type': dep_type, 'status': 'indeterminate', 'text': 'Assembling file...'}))
+            self._assemble_chunks(save_path, temp_dir)
+
+    def _download_chunk(self, url, chunk_path, byte_range, chunk_idx, progress, lock):
+        for attempt in range(self.DOWNLOAD_RETRY_ATTEMPTS):
+            if self.stop_event.is_set(): raise self.CancelledError(f"Chunk {chunk_idx} cancelled.")
+            try:
+                headers = REQUEST_HEADERS.copy()
+                headers['Range'] = f'bytes={byte_range[0]}-{byte_range[1]}'
+                bytes_dl = 0
+                with requests.get(url, headers=headers, stream=True, timeout=REQUEST_TIMEOUTS) as r:
+                    r.raise_for_status()
+                    with open(chunk_path, 'wb') as f:
+                        for part in r.iter_content(chunk_size=8192):
+                            if self.stop_event.is_set(): raise self.CancelledError(f"Chunk {chunk_idx} cancelled.")
+                            f.write(part)
+                            bytes_dl += len(part)
+                            with lock: progress[chunk_idx] = bytes_dl
+                return
+            except self.CancelledError: raise
+            except requests.exceptions.RequestException as e:
+                self.gui_queue.put(('log', f"Error on chunk {chunk_idx}, attempt {attempt + 1}: {e}"))
+                if attempt < self.DOWNLOAD_RETRY_ATTEMPTS - 1: time.sleep(2 ** attempt)
+                else: raise Exception(f"Failed to download chunk {chunk_idx}.") from e
+
+    def _assemble_chunks(self, save_path, temp_dir):
+        with open(save_path, 'wb') as f_out:
+            for i in range(self.DOWNLOAD_CHUNKS):
+                with open(os.path.join(temp_dir, f'chunk_{i}'), 'rb') as f_in:
+                    shutil.copyfileobj(f_in, f_out)
 
     def install_or_update_yt_dlp(self):
         threading.Thread(target=self._install_or_update_yt_dlp_thread, daemon=True, name="yt-dlp-Installer").start()
 
     def _install_or_update_yt_dlp_thread(self):
+        self.stop_event.clear()
         platform = sys.platform
         if platform not in YT_DLP_URLS:
             self.gui_queue.put(('dependency_done', {'type': 'yt-dlp', 'success': False, 'error': f"Unsupported OS: {platform}"}))
@@ -218,14 +316,18 @@ class DependencyManager:
             if platform in ['linux', 'darwin']: os.chmod(save_path, 0o755)
             self.yt_dlp_path = save_path
             self.gui_queue.put(('dependency_done', {'type': 'yt-dlp', 'success': True, 'path': save_path}))
+        except self.CancelledError:
+            self.gui_queue.put(('dependency_done', {'type': 'yt-dlp', 'success': False, 'error': "Download cancelled by user."}))
+        except requests.exceptions.RequestException as e:
+            self.gui_queue.put(('dependency_done', {'type': 'yt-dlp', 'success': False, 'error': f"Network error: {e}"}))
         except Exception as e:
-            error_message = f"Network error: {getattr(e, 'reason', '')}" if isinstance(e, urllib.error.URLError) else str(e)
-            self.gui_queue.put(('dependency_done', {'type': 'yt-dlp', 'success': False, 'error': error_message}))
+            self.gui_queue.put(('dependency_done', {'type': 'yt-dlp', 'success': False, 'error': f"An unexpected error occurred: {e}"}))
 
     def download_ffmpeg(self):
         threading.Thread(target=self._download_ffmpeg_thread, daemon=True, name="FFmpeg-Installer").start()
 
     def _download_ffmpeg_thread(self):
+        self.stop_event.clear()
         platform = sys.platform
         if platform not in FFMPEG_URLS:
             self.gui_queue.put(('dependency_done', {'type': 'ffmpeg', 'success': False, 'error': f"Unsupported OS: {platform}"}))
@@ -256,9 +358,12 @@ class DependencyManager:
                 if platform in ['linux', 'darwin']: os.chmod(final_ffmpeg_path, 0o755)
                 self.ffmpeg_path = final_ffmpeg_path
                 self.gui_queue.put(('dependency_done', {'type': 'ffmpeg', 'success': True, 'path': final_ffmpeg_path}))
+            except self.CancelledError:
+                self.gui_queue.put(('dependency_done', {'type': 'ffmpeg', 'success': False, 'error': "Download cancelled by user."}))
+            except requests.exceptions.RequestException as e:
+                self.gui_queue.put(('dependency_done', {'type': 'ffmpeg', 'success': False, 'error': f"Network error: {e}"}))
             except Exception as e:
-                error_message = f"Network error: {getattr(e, 'reason', '')}" if isinstance(e, urllib.error.URLError) else str(e)
-                self.gui_queue.put(('dependency_done', {'type': 'ffmpeg', 'success': False, 'error': error_message}))
+                self.gui_queue.put(('dependency_done', {'type': 'ffmpeg', 'success': False, 'error': f"An unexpected error occurred: {e}"}))
 
 # --- Download Management Class ---
 
@@ -760,10 +865,26 @@ class YTDlpDownloaderApp:
         self.url_text.config(state=state); self.browse_button.config(state=state); self.download_button.config(state=state)
 
     def show_dependency_progress_window(self, title):
-        if self.dependency_progress_win and self.dependency_progress_win.winfo_exists(): return
-        self.dependency_progress_win = tk.Toplevel(self.root); self.dependency_progress_win.title(title); self.dependency_progress_win.geometry("400x120"); self.dependency_progress_win.resizable(False, False); self.dependency_progress_win.transient(self.root); self.dependency_progress_win.protocol("WM_DELETE_WINDOW", lambda: None)
-        self.dep_progress_label = tk.Label(self.dependency_progress_win, text="Initializing...", pady=10); self.dep_progress_label.pack(fill=tk.X, padx=10)
-        self.dep_progress_bar = ttk.Progressbar(self.dependency_progress_win, orient='horizontal', length=380); self.dep_progress_bar.pack(pady=10)
+            if self.dependency_progress_win and self.dependency_progress_win.winfo_exists(): return
+            self.dependency_progress_win = tk.Toplevel(self.root)
+            self.dependency_progress_win.title(title)
+            self.dependency_progress_win.geometry("400x150")
+            self.dependency_progress_win.resizable(False, False)
+            self.dependency_progress_win.transient(self.root)
+
+            def cancel_and_close():
+                if self.dependency_progress_win and messagebox.askyesno("Confirm Cancel", "Are you sure you want to cancel the download?", parent=self.dependency_progress_win):
+                    self.dep_manager.cancel_download()
+            
+            self.dependency_progress_win.protocol("WM_DELETE_WINDOW", cancel_and_close)
+            
+            self.dep_progress_label = ttk.Label(self.dependency_progress_win, text="Initializing...")
+            self.dep_progress_label.pack(fill=tk.X, padx=10, pady=10)
+            self.dep_progress_bar = ttk.Progressbar(self.dependency_progress_win, orient='horizontal', length=380)
+            self.dep_progress_bar.pack(pady=10)
+            
+            cancel_button = ttk.Button(self.dependency_progress_win, text="Cancel", command=cancel_and_close)
+            cancel_button.pack(pady=5)
 
     def update_dependency_progress(self, data):
         if not self.dependency_progress_win or not self.dependency_progress_win.winfo_exists(): self.show_dependency_progress_window(f"Downloading {data.get('type')}")
