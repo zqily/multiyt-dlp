@@ -63,7 +63,7 @@ class URLInfoExtractor:
         Performs a quick, lightweight check on a URL using --dump-single-json.
         This efficiently handles single videos and detects most errors early.
         """
-        command = [self.yt_dlp_path, '--dump-single-json', '--no-warnings', url]
+        command = [self.yt_dlp_path, '--dump-single-json', '--flat-playlist', '--no-warnings', url]
         kwargs = {'text': True, 'encoding': 'utf-8', 'errors': 'replace'}
         if sys.platform == 'win32':
             kwargs['creationflags'] = SUBPROCESS_CREATION_FLAGS
@@ -105,7 +105,11 @@ class URLInfoExtractor:
         videos = []
         was_partial = False
         
-        process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, **kwargs)
+        try:
+            process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, **kwargs)
+        except FileNotFoundError:
+            self.logger.error(f"yt-dlp executable not found at: {self.yt_dlp_path}")
+            raise URLExtractionError("yt-dlp executable not found.")
         
         stderr_output = []
         def read_pipe(pipe, output_list):
