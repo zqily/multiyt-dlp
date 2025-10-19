@@ -859,7 +859,7 @@ class YTDlpDownloaderApp:
         if self.is_updating_dependency: return
         parent_win = self.settings_win if self.settings_win and self.settings_win.winfo_exists() else self.root
         if messagebox.askyesno(f"Confirm Update", message, parent=parent_win):
-            self.is_updating_dependency = True; self.toggle_update_buttons(False); self.show_dependency_progress_window(f"Updating {dep_type}"); getattr(self.dep_manager, f'{"install_or_update" if dep_type == "yt-dlp" else "download"}_{dep_type}')()
+            self.is_updating_dependency = True; self.toggle_update_buttons(False); self.show_dependency_progress_window(f"Updating {dep_type}"); getattr(self.dep_manager, f'{"install_or_update" if dep_type == "yt-dlp" else "download"}_{dep_type.replace("-", "_")}')()
 
     def show_context_menu(self, event):
         selection = self.downloads_tree.selection()

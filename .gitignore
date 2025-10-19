@@ -5,3 +5,4 @@ config.json
 yt-dlp_options.txt
 yt-dlp.exe
 versions
+ffmpeg.exe
