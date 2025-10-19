@@ -7,4 +7,5 @@ yt-dlp.exe
 versions
 ffmpeg.exe
 src/__pycache__/
-__pycache__
+__pycache__/
+*.pyc
