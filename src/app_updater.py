@@ -1,8 +1,9 @@
 """Manages checking for new application versions on GitHub."""
 import logging
-import queue
 import threading
 import json
+from typing import Callable, Tuple, Any
+
 import requests
 from packaging.version import parse, InvalidVersion
 
@@ -14,15 +15,15 @@ from .config import Settings
 class AppUpdater:
     """Checks for new application versions on GitHub."""
 
-    def __init__(self, gui_queue: queue.Queue, config: Settings):
+    def __init__(self, event_callback: Callable[[Tuple[str, Any]], None], config: Settings):
         """
         Initializes the AppUpdater.
 
         Args:
-            gui_queue: The queue to send messages to the GUI.
+            event_callback: The function to call with manager events.
             config: The application's configuration settings object.
         """
-        self.gui_queue = gui_queue
+        self.event_callback = event_callback
         self.config = config
         self.logger = logging.getLogger(__name__)
 
@@ -33,9 +34,10 @@ class AppUpdater:
 
     def _perform_check(self):
         """
+
         Fetches the latest release info from GitHub and compares versions.
 
-        Communicates with the GUI via the gui_queue if a new version is found.
+        Communicates with the GUI via the event_callback if a new version is found.
         Handles network errors, parsing errors, and unexpected API responses gracefully.
         """
         self.logger.info("Checking for application updates...")
@@ -71,7 +73,7 @@ class AppUpdater:
 
             if latest_version > current_version:
                 self.logger.info(f"New version available: {latest_version}")
-                self.gui_queue.put(('new_version_available', {
+                self.event_callback(('new_version_available', {
                     'version': str(latest_version),
                     'url': release_url
                 }))

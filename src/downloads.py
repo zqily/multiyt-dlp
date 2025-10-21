@@ -9,7 +9,7 @@ import uuid
 import signal
 import logging
 from pathlib import Path
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, Callable, Tuple
 
 from .constants import SUBPROCESS_CREATION_FLAGS, TEMP_DOWNLOAD_DIR
 from .url_extractor import URLInfoExtractor
@@ -18,14 +18,14 @@ from .jobs import DownloadJob
 
 class DownloadManager:
     """Manages the download queue, worker threads, and yt-dlp processes."""
-    def __init__(self, gui_queue: queue.Queue):
+    def __init__(self, event_callback: Callable[[Tuple[str, Any]], None]):
         """
         Initializes the DownloadManager.
 
         Args:
-            gui_queue: The queue for sending messages to the GUI.
+            event_callback: The function to call with manager events.
         """
-        self.gui_queue = gui_queue
+        self.event_callback = event_callback
         self.logger = logging.getLogger(__name__)
         self.job_queue: queue.Queue[DownloadJob] = queue.Queue()
         self.url_processing_queue: queue.Queue[tuple[str, dict]] = queue.Queue()
@@ -39,6 +39,7 @@ class DownloadManager:
         self.max_concurrent_downloads: int = 4
         self.yt_dlp_path: Optional[Path] = None
         self.ffmpeg_path: Optional[Path] = None
+        self.cleanup_temporary_files()
 
     def set_config(self, max_concurrent: int, yt_dlp_path: Optional[Path], ffmpeg_path: Optional[Path]):
         """
@@ -76,7 +77,6 @@ class DownloadManager:
             return
         with self.stats_lock:
             self.completed_jobs, self.total_jobs = 0, 0
-        self.gui_queue.put(('reset_progress', None))
         self.stop_event.clear()
 
         self._start_workers()
@@ -87,7 +87,7 @@ class DownloadManager:
         def monitor_url_queue():
             self.url_processing_queue.join()
             if not self.stop_event.is_set():
-                self.gui_queue.put(('url_processing_done', None))
+                self.event_callback(('url_processing_done', None))
 
         threading.Thread(target=monitor_url_queue, daemon=True, name="URL-Queue-Monitor").start()
 
@@ -112,12 +112,11 @@ class DownloadManager:
             if self.stop_event.is_set(): break
             job.status = "Queued"
             job.progress = "0%"
-            self.gui_queue.put(('add_job', job))
+            self.event_callback(('add_job', job))
             self.job_queue.put(job)
 
         with self.stats_lock:
             self.total_jobs += len(jobs_to_add)
-        self.gui_queue.put(('total_jobs_updated', None))
         self._start_workers()
 
     def stop_all_downloads(self):
@@ -130,7 +129,7 @@ class DownloadManager:
                 try:
                     if q is self.job_queue:
                         job: DownloadJob = q.get_nowait()
-                        self.gui_queue.put(('done', (job.job_id, 'Cancelled')))
+                        self.event_callback(('done', (job.job_id, 'Cancelled')))
                     else:
                         q.get_nowait()
                     q.task_done()
@@ -159,13 +158,12 @@ class DownloadManager:
                 except (OSError, ProcessLookupError) as kill_e:
                     self.logger.error(f"Forceful termination for {job_id} also failed: {kill_e}")
 
-            self.gui_queue.put(('done', (job_id, 'Cancelled')))
+            self.event_callback(('done', (job_id, 'Cancelled')))
             with self.active_processes_lock:
                 if job_id in self.active_processes: del self.active_processes[job_id]
 
         self.cleanup_temporary_files()
         with self.stats_lock: self.total_jobs, self.completed_jobs = 0, 0
-        self.gui_queue.put(('reset_progress', None))
 
     def _url_processor_worker(self):
         """Worker thread that processes URLs to create DownloadJob objects."""
@@ -185,12 +183,11 @@ class DownloadManager:
                     if video_count > 0:
                         with self.stats_lock:
                             self.total_jobs += video_count
-                        self.gui_queue.put(('total_jobs_updated', None))
 
                     if video_count == 1:
                         title = extractor.get_single_video_title(url)
                         job = DownloadJob(job_id=str(uuid.uuid4()), original_url=url, options=options.copy(), title=title)
-                        self.gui_queue.put(('add_job', job))
+                        self.event_callback(('add_job', job))
                         self.job_queue.put(job)
                     elif video_count > 1:
                         for i in range(1, video_count + 1):
@@ -199,7 +196,7 @@ class DownloadManager:
                                 job_id=str(uuid.uuid4()), original_url=url, options=options.copy(),
                                 title=f"Item {i}/{video_count} from playlist...", playlist_index=i
                             )
-                            self.gui_queue.put(('add_job', job))
+                            self.event_callback(('add_job', job))
                             self.job_queue.put(job)
 
                 except DownloadCancelledError:
@@ -208,8 +205,8 @@ class DownloadManager:
                     self.logger.error(f"[{thread_name}] Failed to process '{url}': {e}")
                     job_id = str(uuid.uuid4())
                     job = DownloadJob(job_id, url, {}, title=f"Error: {e}", status=f"Error: {e}", progress="N/A")
-                    self.gui_queue.put(('add_job', job))
-                    self.gui_queue.put(('done', (job_id, "Failed")))
+                    self.event_callback(('add_job', job))
+                    self.event_callback(('done', (job_id, "Failed")))
                 except Exception:
                     self.logger.exception(f"[{thread_name}] Unhandled error processing URL: {url}")
                 finally:
@@ -251,9 +248,9 @@ class DownloadManager:
                 job: DownloadJob = self.job_queue.get(timeout=1)
                 try:
                     if self.stop_event.is_set():
-                        self.gui_queue.put(('done', (job.job_id, 'Cancelled')))
+                        self.event_callback(('done', (job.job_id, 'Cancelled')))
                         continue
-                    self.gui_queue.put(('update_job', (job.job_id, 'status', 'Downloading')))
+                    self.event_callback(('update_job', (job.job_id, 'status', 'Downloading')))
                     self._run_download_process(job)
                 finally:
                     self.job_queue.task_done()
@@ -329,14 +326,14 @@ class DownloadManager:
                         if new_title and new_title != job.title:
                             self.logger.info(f"Updating title for {job.job_id} to '{new_title}'")
                             job.title = new_title
-                            self.gui_queue.put(('update_job', (job.job_id, 'title', new_title)))
+                            self.event_callback(('update_job', (job.job_id, 'title', new_title)))
 
                     if clean_line.startswith('ERROR:'): error_message = clean_line[6:].strip()
                     status_match = re.search(r'\[(\w+)\]', clean_line)
                     if status_match:
                         status_key = status_match.group(1).lower()
                         status_map = {'merger': 'Merging...', 'extractaudio': 'Extracting Audio...', 'embedthumbnail': 'Embedding...', 'fixupm4a': 'Fixing M4a...', 'metadata': 'Writing Metadata...'}
-                        if status_key in status_map: self.gui_queue.put(('update_job', (job.job_id, 'status', status_map[status_key])))
+                        if status_key in status_map: self.event_callback(('update_job', (job.job_id, 'status', status_map[status_key])))
                     percentage = None
                     if clean_line.startswith('PROGRESS::'):
                         try: percentage = float(clean_line.split('::', 1)[1].strip().rstrip('%'))
@@ -346,7 +343,7 @@ class DownloadManager:
                         if match:
                             try: percentage = float(match.group(1))
                             except ValueError: pass
-                    if percentage is not None: self.gui_queue.put(('update_job', (job.job_id, 'progress', f"{percentage:.1f}%")))
+                    if percentage is not None: self.event_callback(('update_job', (job.job_id, 'progress', f"{percentage:.1f}%")))
 
                 process.stdout.close()
 
@@ -371,4 +368,4 @@ class DownloadManager:
                 if job.job_id in self.active_processes: del self.active_processes[job.job_id]
             if not self.stop_event.is_set():
                 with self.stats_lock: self.completed_jobs += 1
-                self.gui_queue.put(('done', (job.job_id, final_status)))
+                self.event_callback(('done', (job.job_id, final_status)))

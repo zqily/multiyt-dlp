@@ -16,6 +16,7 @@ from src.gui import YTDlpDownloaderApp
 from src.logging_config import setup_logging
 from src.config import ConfigManager
 from src.constants import CONFIG_FILE, TEMP_DOWNLOAD_DIR
+from src.controller import AppController
 
 def handle_exception(exc_type: Type[BaseException], exc_value: BaseException, exc_traceback: TracebackType):
     """
@@ -53,7 +54,10 @@ if __name__ == "__main__":
     # 4. Set up global exception handler
     sys.excepthook = handle_exception
 
-    # 5. Create and run the Tkinter application
+    # 5. Create the Controller, which holds all business logic
+    controller = AppController(gui_queue, config_manager, config)
+
+    # 6. Create and run the Tkinter application (the View)
     root = tk.Tk()
-    app = YTDlpDownloaderApp(root, gui_queue, config_manager, config)
+    app = YTDlpDownloaderApp(root, gui_queue, controller, config)
     root.mainloop()

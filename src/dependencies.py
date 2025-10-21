@@ -8,11 +8,10 @@ import zipfile
 import tarfile
 import time
 import tempfile
-import queue
 import logging
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, as_completed, wait
-from typing import Optional, List, Tuple
+from typing import Optional, List, Tuple, Callable, Any
 
 import requests
 
@@ -28,14 +27,14 @@ class DependencyManager:
     DOWNLOAD_CHUNKS = 8
     DOWNLOAD_RETRY_ATTEMPTS = 3
 
-    def __init__(self, gui_queue: queue.Queue):
+    def __init__(self, event_callback: Callable[[Tuple[str, Any]], None]):
         """
         Initializes the DependencyManager.
 
         Args:
-            gui_queue: The queue for sending progress updates to the GUI.
+            event_callback: The function to call with manager events.
         """
-        self.gui_queue = gui_queue
+        self.event_callback = event_callback
         self.logger = logging.getLogger(__name__)
         self.yt_dlp_path: Optional[Path] = self.find_yt_dlp()
         self.ffmpeg_path: Optional[Path] = self.find_ffmpeg()
@@ -136,7 +135,7 @@ class DependencyManager:
             DownloadCancelledError: If the download is cancelled by the user.
             requests.exceptions.RequestException: If a network error occurs.
         """
-        self.gui_queue.put(('dependency_progress', {'type': dep_type, 'status': 'determinate', 'text': 'Preparing download...', 'value': 0}))
+        self.event_callback(('dependency_progress', {'type': dep_type, 'status': 'determinate', 'text': 'Preparing download...', 'value': 0}))
 
         total_size = 0
         supports_ranges = False
@@ -167,7 +166,7 @@ class DependencyManager:
                 except OSError: pass
             self._download_file_single_stream(url, save_path, dep_type)
 
-        self.gui_queue.put(('dependency_progress', {
+        self.event_callback(('dependency_progress', {
             'type': dep_type, 'status': 'determinate',
             'text': 'Download complete. Preparing...', 'value': 100
         }))
@@ -181,7 +180,7 @@ class DependencyManager:
                     r.raise_for_status()
                     total_size = int(r.headers.get('Content-Length', 0))
                     if total_size <= 0:
-                        self.gui_queue.put(('dependency_progress', {'type': dep_type, 'status': 'indeterminate', 'text': f'Downloading {dep_type}... (Size unknown)'}))
+                        self.event_callback(('dependency_progress', {'type': dep_type, 'status': 'indeterminate', 'text': f'Downloading {dep_type}... (Size unknown)'}))
 
                     bytes_downloaded, chunk_size = 0, 8192
                     start_time = time.time()
@@ -195,7 +194,7 @@ class DependencyManager:
                                 elapsed = time.time() - start_time
                                 speed = (bytes_downloaded / elapsed) / 1024 / 1024 if elapsed > 0 else 0
                                 text = f'Downloading... {bytes_downloaded/1024/1024:.1f}/{total_size/1024/1024:.1f} MB ({speed:.1f} MB/s)'
-                                self.gui_queue.put(('dependency_progress', {'type': dep_type, 'status': 'determinate', 'text': text, 'value': progress}))
+                                self.event_callback(('dependency_progress', {'type': dep_type, 'status': 'determinate', 'text': text, 'value': progress}))
                 return
             except DownloadCancelledError: raise
             except requests.exceptions.RequestException as e:
@@ -224,7 +223,7 @@ class DependencyManager:
                         elapsed = time.time() - start_time
                         speed = (bytes_downloaded / elapsed) / 1024 / 1024 if elapsed > 0 else 0
                         text = f'Downloading... {bytes_downloaded/1024/1024:.1f}/{total_size/1024/1024:.1f} MB ({speed:.1f} MB/s)'
-                        self.gui_queue.put(('dependency_progress', {'type': dep_type, 'status': 'determinate', 'text': text, 'value': percent}))
+                        self.event_callback(('dependency_progress', {'type': dep_type, 'status': 'determinate', 'text': text, 'value': percent}))
 
                     if self.stop_event.is_set(): break
                     if not not_done: break
@@ -234,7 +233,7 @@ class DependencyManager:
 
             if self.stop_event.is_set(): raise DownloadCancelledError("Download cancelled before file assembly.")
 
-            self.gui_queue.put(('dependency_progress', {'type': dep_type, 'status': 'indeterminate', 'text': 'Assembling file...'}))
+            self.event_callback(('dependency_progress', {'type': dep_type, 'status': 'indeterminate', 'text': 'Assembling file...'}))
             self._assemble_chunks(save_path, temp_path)
 
     def _download_chunk(self, url: str, chunk_path: Path, byte_range: Tuple[int, int], chunk_idx: int, progress: list, lock: threading.Lock):
@@ -276,7 +275,7 @@ class DependencyManager:
         self.stop_event.clear()
         platform = sys.platform
         if platform not in YT_DLP_URLS:
-            self.gui_queue.put(('dependency_done', {'type': 'yt-dlp', 'success': False, 'error': f"Unsupported OS: {platform}"}))
+            self.event_callback(('dependency_done', {'type': 'yt-dlp', 'success': False, 'error': f"Unsupported OS: {platform}"}))
             return
         try:
             url = YT_DLP_URLS[platform]
@@ -289,19 +288,19 @@ class DependencyManager:
                 save_path.chmod(0o755)
 
             self.yt_dlp_path = save_path
-            self.gui_queue.put(('dependency_done', {'type': 'yt-dlp', 'success': True, 'path': str(save_path)}))
+            self.event_callback(('dependency_done', {'type': 'yt-dlp', 'success': True, 'path': str(save_path)}))
         except DownloadCancelledError:
             self.logger.info("yt-dlp download cancelled by user.")
-            self.gui_queue.put(('dependency_done', {'type': 'yt-dlp', 'success': False, 'error': "Download cancelled by user."}))
+            self.event_callback(('dependency_done', {'type': 'yt-dlp', 'success': False, 'error': "Download cancelled by user."}))
         except requests.exceptions.RequestException as e:
             self.logger.exception("Network error during yt-dlp download.")
-            self.gui_queue.put(('dependency_done', {'type': 'yt-dlp', 'success': False, 'error': f"Network error: {e}"}))
+            self.event_callback(('dependency_done', {'type': 'yt-dlp', 'success': False, 'error': f"Network error: {e}"}))
         except (IOError, OSError) as e:
             self.logger.exception("File system error during yt-dlp installation.")
-            self.gui_queue.put(('dependency_done', {'type': 'yt-dlp', 'success': False, 'error': f"File error: {e}"}))
+            self.event_callback(('dependency_done', {'type': 'yt-dlp', 'success': False, 'error': f"File error: {e}"}))
         except Exception:
             self.logger.exception("An unexpected error occurred during yt-dlp download.")
-            self.gui_queue.put(('dependency_done', {'type': 'yt-dlp', 'success': False, 'error': "An unexpected error occurred."}))
+            self.event_callback(('dependency_done', {'type': 'yt-dlp', 'success': False, 'error': "An unexpected error occurred."}))
 
     def download_ffmpeg(self):
         """Starts the FFmpeg download process in a new thread."""
@@ -312,7 +311,7 @@ class DependencyManager:
         self.stop_event.clear()
         platform = sys.platform
         if platform not in FFMPEG_URLS:
-            self.gui_queue.put(('dependency_done', {'type': 'ffmpeg', 'success': False, 'error': f"Unsupported OS: {platform}"}))
+            self.event_callback(('dependency_done', {'type': 'ffmpeg', 'success': False, 'error': f"Unsupported OS: {platform}"}))
             return
 
         url = FFMPEG_URLS[platform]
@@ -327,7 +326,7 @@ class DependencyManager:
 
                 self._download_file_with_progress(url, archive_path, 'ffmpeg')
 
-                self.gui_queue.put(('dependency_progress', {'type': 'ffmpeg', 'status': 'indeterminate', 'text': 'Extracting FFmpeg...'}))
+                self.event_callback(('dependency_progress', {'type': 'ffmpeg', 'status': 'indeterminate', 'text': 'Extracting FFmpeg...'}))
                 extract_dir.mkdir(exist_ok=True)
 
                 if archive_path.suffix == '.zip':
@@ -335,7 +334,7 @@ class DependencyManager:
                 elif '.tar.xz' in archive_path.name:
                     with tarfile.open(archive_path, 'r:xz') as tar_ref: tar_ref.extractall(path=extract_dir)
 
-                self.gui_queue.put(('dependency_progress', {'type': 'ffmpeg', 'status': 'indeterminate', 'text': 'Locating executable...'}))
+                self.event_callback(('dependency_progress', {'type': 'ffmpeg', 'status': 'indeterminate', 'text': 'Locating executable...'}))
 
                 found_files = list(extract_dir.rglob(final_ffmpeg_name))
                 if not found_files: raise FileNotFoundError(f"Could not find '{final_ffmpeg_name}' in archive.")
@@ -347,23 +346,23 @@ class DependencyManager:
                 if platform in ['linux', 'darwin']: final_ffmpeg_path.chmod(0o755)
 
                 self.ffmpeg_path = final_ffmpeg_path
-                self.gui_queue.put(('dependency_done', {'type': 'ffmpeg', 'success': True, 'path': str(final_ffmpeg_path)}))
+                self.event_callback(('dependency_done', {'type': 'ffmpeg', 'success': True, 'path': str(final_ffmpeg_path)}))
 
             except DownloadCancelledError:
                 self.logger.info("FFmpeg download cancelled by user.")
-                self.gui_queue.put(('dependency_done', {'type': 'ffmpeg', 'success': False, 'error': "Download cancelled by user."}))
+                self.event_callback(('dependency_done', {'type': 'ffmpeg', 'success': False, 'error': "Download cancelled by user."}))
             except requests.exceptions.RequestException as e:
                 self.logger.exception("Network error during FFmpeg download.")
-                self.gui_queue.put(('dependency_done', {'type': 'ffmpeg', 'success': False, 'error': f"Network error: {e}"}))
+                self.event_callback(('dependency_done', {'type': 'ffmpeg', 'success': False, 'error': f"Network error: {e}"}))
             except (zipfile.BadZipFile, tarfile.ReadError) as e:
                 self.logger.exception("Error extracting FFmpeg archive.")
-                self.gui_queue.put(('dependency_done', {'type': 'ffmpeg', 'success': False, 'error': f"Archive error: {e}"}))
+                self.event_callback(('dependency_done', {'type': 'ffmpeg', 'success': False, 'error': f"Archive error: {e}"}))
             except FileNotFoundError as e:
                 self.logger.exception("Could not find FFmpeg executable in extracted files.")
-                self.gui_queue.put(('dependency_done', {'type': 'ffmpeg', 'success': False, 'error': str(e)}))
+                self.event_callback(('dependency_done', {'type': 'ffmpeg', 'success': False, 'error': str(e)}))
             except (IOError, OSError) as e:
                 self.logger.exception("File system error during FFmpeg installation.")
-                self.gui_queue.put(('dependency_done', {'type': 'ffmpeg', 'success': False, 'error': f"File error: {e}"}))
+                self.event_callback(('dependency_done', {'type': 'ffmpeg', 'success': False, 'error': f"File error: {e}"}))
             except Exception:
                 self.logger.exception("An unexpected error occurred during FFmpeg download.")
-                self.gui_queue.put(('dependency_done', {'type': 'ffmpeg', 'success': False, 'error': "An unexpected error occurred."}))
+                self.event_callback(('dependency_done', {'type': 'ffmpeg', 'success': False, 'error': "An unexpected error occurred."}))

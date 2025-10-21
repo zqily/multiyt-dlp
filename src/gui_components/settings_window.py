@@ -4,33 +4,29 @@ Defines the Toplevel window for application settings.
 
 import tkinter as tk
 from tkinter import ttk, messagebox
-import threading
-from pydantic import ValidationError
 
 from ..constants import resource_path
-from ..config import ConfigManager, Settings
-from ..dependencies import DependencyManager
+from ..config import Settings
+from ..controller import AppController
 
 
 class SettingsWindow(tk.Toplevel):
     """A Toplevel window for managing application settings."""
 
-    def __init__(self, master: tk.Tk, config_manager: ConfigManager, config: Settings, dep_manager: DependencyManager, yt_dlp_var: tk.StringVar, ffmpeg_var: tk.StringVar):
+    def __init__(self, master: tk.Tk, app_controller: AppController, config: Settings, yt_dlp_var: tk.StringVar, ffmpeg_var: tk.StringVar):
         """
         Initializes the Settings window.
 
         Args:
             master: The parent window.
-            config_manager: The manager for saving configuration.
+            app_controller: The central application controller.
             config: The current application Settings object.
-            dep_manager: The manager for handling dependencies.
             yt_dlp_var: StringVar from main app for yt-dlp version.
             ffmpeg_var: StringVar from main app for FFmpeg status.
         """
         super().__init__(master)
-        self.config_manager = config_manager
+        self.app_controller = app_controller
         self.config = config
-        self.dep_manager = dep_manager
         self.is_updating_dependency = False
 
         self.title("Settings")
@@ -86,18 +82,10 @@ class SettingsWindow(tk.Toplevel):
         ttk.Button(buttons_frame, text="Cancel", command=self.destroy).pack(side=tk.LEFT)
 
     def check_dependency_versions(self):
-        """Fetches and updates the version/status of dependencies."""
-        def check_yt_dlp():
-            self.yt_dlp_version_var.set("Checking...")
-            version = self.dep_manager.get_version(self.dep_manager.yt_dlp_path)
-            if self.winfo_exists(): self.yt_dlp_version_var.set(version)
-        def check_ffmpeg():
-            self.ffmpeg_status_var.set("Checking...")
-            status = self.dep_manager.get_version(self.dep_manager.ffmpeg_path)
-            if self.winfo_exists(): self.ffmpeg_status_var.set(status)
-
-        threading.Thread(target=check_yt_dlp, daemon=True).start()
-        threading.Thread(target=check_ffmpeg, daemon=True).start()
+        """Asks the controller to fetch dependency versions."""
+        self.yt_dlp_version_var.set("Checking...")
+        self.ffmpeg_status_var.set("Checking...")
+        self.app_controller.get_dependency_versions()
 
     def _save_and_close(self):
         """Validates settings, saves them, and closes the window."""
@@ -105,26 +93,19 @@ class SettingsWindow(tk.Toplevel):
             messagebox.showwarning("Busy", "Cannot save settings while updating.", parent=self)
             return
 
-        updated_values = {
+        new_settings_data = {
             'max_concurrent_downloads': self.concurrent_var.get(),
             'filename_template': self.temp_filename_template.get().strip(),
             'log_level': self.log_level_var.get(),
             'check_for_updates_on_startup': self.update_check_var.get()
         }
 
-        try:
-            # Validate by creating a new Settings object with the updated values
-            new_settings = self.config.copy(update=updated_values)
-            self.config_manager.save(new_settings)
-
-            # Update the main app's config object in-place safely
-            self.config.__dict__.update(new_settings.__dict__)
-            messagebox.showinfo("Settings Saved", "Settings have been saved.", parent=self)
+        success, message = self.app_controller.save_settings(new_settings_data)
+        if success:
+            messagebox.showinfo("Settings Saved", message, parent=self)
             self.destroy()
-        except ValidationError as e:
-            error_details = e.errors()[0]
-            field, msg = error_details['loc'][0], error_details['msg']
-            messagebox.showerror("Validation Error", f"Error in field '{field}': {msg}", parent=self)
+        else:
+            messagebox.showerror("Validation Error", message, parent=self)
 
     def _toggle_update_buttons(self, enabled: bool):
         """Enables or disables the dependency update buttons."""
@@ -146,15 +127,11 @@ class SettingsWindow(tk.Toplevel):
         if messagebox.askyesno(f"Confirm Update", message, parent=self):
             self.is_updating_dependency = True
             self._toggle_update_buttons(False)
-
-            if dep_type == "yt-dlp":
-                self.dep_manager.install_or_update_yt_dlp()
-            else:
-                self.dep_manager.download_ffmpeg()
+            self.app_controller.initiate_dependency_download(dep_type)
 
     def on_dependency_update_complete(self):
         """Callback for when a dependency update finishes."""
         if self.winfo_exists():
             self.is_updating_dependency = False
             self._toggle_update_buttons(True)
-            self.check_dependency_versions() # Refresh versions after update
+            self.check_dependency_versions()
