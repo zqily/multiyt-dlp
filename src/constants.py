@@ -1,33 +1,48 @@
+"""
+Defines application-wide constants, paths, and utility functions.
+
+This module centralizes configuration for paths, URLs, and subprocess behavior,
+adapting to whether the application is running from source or as a frozen executable.
+"""
+
 import sys
-import os
 import subprocess
+from pathlib import Path
 
 # --- Application Path and Configuration Setup ---
 if getattr(sys, 'frozen', False):
     # If the application is run as a bundle, the PyInstaller bootloader
     # sets the app path to the executable's directory.
-    APP_PATH = os.path.dirname(sys.executable)
+    APP_PATH = Path(sys.executable).parent
 else:
     # In development, the app path is the project root (parent of 'src').
-    APP_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+    APP_PATH = Path(__file__).resolve().parent.parent
 
 # Use a user-specific directory for configuration to avoid permission issues.
-USER_DATA_DIR = os.path.join(os.path.expanduser('~'), '.multiyt-dlp')
-CONFIG_FILE = os.path.join(USER_DATA_DIR, 'config.json')
-LOG_DIR = os.path.join(USER_DATA_DIR, 'logs')
-TEMP_DOWNLOAD_DIR = os.path.join(USER_DATA_DIR, 'temp_downloads')
+USER_DATA_DIR: Path = Path.home() / '.multiyt-dlp'
+CONFIG_FILE: Path = USER_DATA_DIR / 'config.json'
+LOG_DIR: Path = USER_DATA_DIR / 'logs'
+TEMP_DOWNLOAD_DIR: Path = USER_DATA_DIR / 'temp_downloads'
 
 # Centralize subprocess creation flags to avoid console windows on Windows.
 SUBPROCESS_CREATION_FLAGS = subprocess.CREATE_NO_WINDOW if sys.platform == 'win32' else 0
 
-def resource_path(relative_path):
-    """ Get absolute path to resource, works for dev and for PyInstaller """
+def resource_path(relative_path: str) -> Path:
+    """
+    Get absolute path to resource, works for dev and for PyInstaller.
+
+    Args:
+        relative_path: The path to the resource relative to the application root.
+
+    Returns:
+        An absolute Path object to the resource.
+    """
     try:
         # PyInstaller creates a temp folder and stores path in _MEIPASS
-        base_path = sys._MEIPASS  # type: ignore
-    except Exception:
+        base_path = Path(sys._MEIPASS)  # type: ignore
+    except AttributeError:
         base_path = APP_PATH
-    return os.path.join(base_path, relative_path)
+    return base_path / relative_path
 
 # --- Constants ---
 YT_DLP_URLS = {

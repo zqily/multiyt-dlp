@@ -1,16 +1,27 @@
+"""Manages checking for new application versions on GitHub."""
 import logging
 import queue
 import threading
+import json
 import requests
 from packaging.version import parse, InvalidVersion
 
 from .constants import GITHUB_API_URL, REQUEST_HEADERS, REQUEST_TIMEOUTS
 from ._version import __version__
+from .config import Settings
+
 
 class AppUpdater:
     """Checks for new application versions on GitHub."""
 
-    def __init__(self, gui_queue: queue.Queue, config: dict):
+    def __init__(self, gui_queue: queue.Queue, config: Settings):
+        """
+        Initializes the AppUpdater.
+
+        Args:
+            gui_queue: The queue to send messages to the GUI.
+            config: The application's configuration settings object.
+        """
         self.gui_queue = gui_queue
         self.config = config
         self.logger = logging.getLogger(__name__)
@@ -21,7 +32,12 @@ class AppUpdater:
         thread.start()
 
     def _perform_check(self):
-        """Fetches the latest release info from GitHub and compares versions."""
+        """
+        Fetches the latest release info from GitHub and compares versions.
+
+        Communicates with the GUI via the gui_queue if a new version is found.
+        Handles network errors, parsing errors, and unexpected API responses gracefully.
+        """
         self.logger.info("Checking for application updates...")
         latest_version_str = ""  # Initialize to prevent potential unbound error
         try:
@@ -44,13 +60,13 @@ class AppUpdater:
             if latest_version_str.startswith('v'):
                 latest_version_str = latest_version_str[1:]
 
-            if latest_version_str == self.config.get('skipped_update_version'):
+            if latest_version_str == self.config.skipped_update_version:
                 self.logger.info(f"Update for version {latest_version_str} has been skipped by the user.")
                 return
 
             current_version = parse(__version__)
             latest_version = parse(latest_version_str)
-            
+
             self.logger.info(f"Current version: {current_version}, Latest version found: {latest_version}")
 
             if latest_version > current_version:
@@ -63,7 +79,7 @@ class AppUpdater:
         except requests.exceptions.RequestException as e:
             status_code = f" (Status: {e.response.status_code})" if hasattr(e, 'response') and e.response is not None else ""
             self.logger.warning(f"Failed to check for updates (network error): {e}{status_code}")
-        except (InvalidVersion, KeyError, TypeError) as e:
+        except (InvalidVersion, KeyError, TypeError, json.JSONDecodeError) as e:
             self.logger.warning(f"Could not parse API response from GitHub: {e}")
             if latest_version_str:
                 self.logger.warning(f"Version string was: '{latest_version_str}'")
