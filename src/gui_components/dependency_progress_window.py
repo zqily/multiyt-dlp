@@ -37,7 +37,10 @@ class DependencyProgressWindow(tk.Toplevel):
         self.title(title)
         self.geometry("400x150")
         self.resizable(False, False)
-        self.transient(self.master)
+        # Calling transient() without arguments defaults to self.master.
+        # This avoids a static type-checking error where self.master is typed
+        # more generically than the method expects.
+        self.transient()
         self.protocol("WM_DELETE_WINDOW", self._on_cancel)
         self._create_widgets()
         self.deiconify() # Show the window

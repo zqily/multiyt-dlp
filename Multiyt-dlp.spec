@@ -1,16 +1,40 @@
 # -*- mode: python ; coding: utf-8 -*-
 
-# This block is for collecting the data files and Python source files.
+"""
+PyInstaller spec file for the Multiyt-dlp application.
+
+This file is configured for a one-file, windowed (no console) executable
+build, including the necessary data files and hidden imports for robust
+operation.
+
+Author: zqil
+"""
+
+# Block 1: Analysis - Discovering the application's dependencies.
+# This is the most critical stage where we define source files, data files,
+# and handle modules that PyInstaller might miss.
 a = Analysis(
-    ['main.py'],  # CORRECT: The entry point of your application is main.py
-    pathex=['src'],  # IMPORTANT: Tells PyInstaller to look for imports in the 'src' directory.
-    binaries=[],
-    datas=[('icon.ico', '.')],  # CORRECT: Bundles icon.ico into the app's root directory.
+    ['main.py'],  # The main entry point of the application.
+    pathex=['src'],  # CRITICAL: Tells PyInstaller to look for imports inside the 'src' directory.
+    binaries=[],   # No external binaries are bundled; yt-dlp/ffmpeg are downloaded at runtime.
+    datas=[
+        ('icon.ico', '.')  # Bundles 'icon.ico' into the app's root (_MEIPASS) directory
+                           # so resource_path('icon.ico') can find it.
+    ],
     hiddenimports=[
+        # PRECAUTION: The 'packaging' library is used for version checks and is
+        # often missed by PyInstaller's static analysis.
         'packaging.version',
         'packaging.specifiers',
-        'packaging.requirements'
-    ],  # PRECAUTION: The 'packaging' library is often missed by PyInstaller's analysis.
+        'packaging.requirements',
+
+        # PRECAUTION: Pydantic is a complex library that uses dynamic imports.
+        # Explicitly including these core modules prevents runtime 'ModuleNotFoundError'.
+        'pydantic.v1',
+        'pydantic.main',
+        'pydantic.networks',
+        'pydantic.types',
+    ],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
@@ -19,10 +43,13 @@ a = Analysis(
     optimize=0,
 )
 
-# This creates the .pyz archive containing all the Python modules.
+# Block 2: PYZ - Creating the Python library archive.
+# This bundles all the Python modules found during the Analysis stage into a
+# single compressed archive inside the final executable.
 pyz = PYZ(a.pure)
 
-# This defines the final executable file.
+# Block 3: EXE - Assembling the final executable.
+# This section defines the properties of the final .exe file.
 exe = EXE(
     pyz,
     a.scripts,
@@ -32,17 +59,19 @@ exe = EXE(
     name='Multiyt-dlp',
     debug=False,
     bootloader_ignore_signals=False,
-    strip=False,
-    upx=True,
+    strip=False,  # Set to True to potentially reduce file size, but may affect debugging.
+    upx=True,     # Use UPX to compress the final executable if available.
     upx_exclude=[],
     runtime_tmpdir=None,
-    # This is critical for GUI apps on Windows to hide the black console window.
+
+    # CRITICAL: This is essential for GUI apps on Windows to hide the black console window.
     console=False,
     disable_windowed_traceback=False,
     argv_emulation=False,
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-    # This sets the application icon for the .exe file itself.
+
+    # This sets the application icon for the .exe file itself in the file explorer.
     icon='icon.ico',
 )
