@@ -2,7 +2,7 @@
 
 A user-friendly graphical interface for the powerful command-line tool `yt-dlp`. It's designed to simplify the process of downloading multiple videos or entire playlists in parallel, with extensive format options, powerful customization, and automatic dependency handling.
 
-<img width="852" height="782" alt="A screenshot of Multiyt-dlp" src="https://github.com/zqily/multiyt-dlp/raw/main/assets/multiyt-dlp-screenshot.png" />
+<img width="852" height="782" alt="A screenshot of Multiyt-dlp" src="https://github.com/zqily/multiyt-dlp/raw/main/assets/multiyt-dlp-screenshot.webp" />
 
 ## ✨ Key Features
 
