@@ -89,7 +89,7 @@ class SettingsWindow(tk.Toplevel):
 
         buttons_frame = ttk.Frame(settings_frame)
         buttons_frame.grid(row=7, column=0, columnspan=2, pady=15, sticky=tk.E)
-        ttk.Button(buttons_frame, text="Save", command=self._save_and_close).pack(side=tk.LEFT, padx=5)
+        ttk.Button(buttons_frame, text="Save", command=lambda: asyncio.create_task(self._save_and_close())).pack(side=tk.LEFT, padx=5)
         ttk.Button(buttons_frame, text="Cancel", command=self.destroy).pack(side=tk.LEFT)
 
     async def check_dependency_versions(self):
@@ -98,10 +98,10 @@ class SettingsWindow(tk.Toplevel):
         self.ffmpeg_status_var.set("Checking...")
         await self.app_controller.get_dependency_versions()
 
-    def _save_and_close(self):
+    async def _save_and_close(self):
         """Validates settings, saves them, and closes the window."""
         if self.is_updating_dependency:
-            messagebox.showwarning("Busy", "Cannot save settings while updating.", parent=self)
+            await asyncio.to_thread(messagebox.showwarning, "Busy", "Cannot save settings while updating.", parent=self)
             return
 
         new_settings_data = {
@@ -113,10 +113,10 @@ class SettingsWindow(tk.Toplevel):
 
         success, message = self.app_controller.save_settings(new_settings_data)
         if success:
-            messagebox.showinfo("Settings Saved", message, parent=self)
+            await asyncio.to_thread(messagebox.showinfo, "Settings Saved", message, parent=self)
             self.destroy()
         else:
-            messagebox.showerror("Validation Error", message, parent=self)
+            await asyncio.to_thread(messagebox.showerror, "Validation Error", message, parent=self)
 
     def _toggle_update_buttons(self, enabled: bool):
         """Enables or disables the dependency update buttons."""
@@ -135,7 +135,13 @@ class SettingsWindow(tk.Toplevel):
     async def _start_dep_update(self, dep_type: str, message: str):
         """Generic method to start a dependency update."""
         if self.is_updating_dependency: return
-        if messagebox.askyesno(f"Confirm Update", message, parent=self):
+        should_update = await asyncio.to_thread(
+            messagebox.askyesno,
+            "Confirm Update",
+            message,
+            parent=self
+        )
+        if should_update:
             self.is_updating_dependency = True
             self._toggle_update_buttons(False)
             

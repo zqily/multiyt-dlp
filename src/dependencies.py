@@ -36,9 +36,19 @@ class DependencyManager:
         """
         self.event_callback = event_callback
         self.logger = logging.getLogger(__name__)
-        self.yt_dlp_path: Optional[Path] = self.find_yt_dlp()
-        self.ffmpeg_path: Optional[Path] = self.find_ffmpeg()
+        self.yt_dlp_path: Optional[Path] = None
+        self.ffmpeg_path: Optional[Path] = None
         self.download_task: Optional[asyncio.Task] = None
+
+    async def initialize(self):
+        """Asynchronously finds paths to dependencies to avoid blocking the event loop."""
+        self.logger.info("Initializing dependency paths...")
+        self.yt_dlp_path, self.ffmpeg_path = await asyncio.gather(
+            asyncio.to_thread(self.find_yt_dlp),
+            asyncio.to_thread(self.find_ffmpeg)
+        )
+        self.logger.info(f"yt-dlp path: {self.yt_dlp_path}")
+        self.logger.info(f"FFmpeg path: {self.ffmpeg_path}")
 
     def cancel_download(self):
         """Signals the download process to stop."""

@@ -51,6 +51,12 @@ class AppController:
 
     async def run_startup_checks(self):
         """Runs initial async checks after the event loop has started."""
+        # Defer synchronous I/O to avoid blocking the event loop on startup.
+        await self.dep_manager.initialize()
+
+        # Initialize managers that need async setup
+        await self.download_manager.initialize()
+
         if self.config.check_for_updates_on_startup:
              task = asyncio.create_task(self.check_for_updates())
              task.add_done_callback(self._handle_task_exception)

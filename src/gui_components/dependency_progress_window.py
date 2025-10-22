@@ -2,6 +2,7 @@
 Defines a reusable Toplevel window for showing dependency download progress.
 """
 
+import asyncio
 import tkinter as tk
 from tkinter import ttk, messagebox
 from typing import Callable, Dict, Any
@@ -10,17 +11,19 @@ from typing import Callable, Dict, Any
 class DependencyProgressWindow(tk.Toplevel):
     """A Toplevel window for displaying dependency download progress."""
 
-    def __init__(self, master: tk.Tk, cancel_callback: Callable[[], None]):
+    def __init__(self, master: tk.Tk, cancel_callback: Callable[[], None], loop: asyncio.AbstractEventLoop):
         """
         Initializes the dependency progress window.
 
         Args:
             master: The parent window.
             cancel_callback: The function to call when the cancel button is pressed.
+            loop: The asyncio event loop.
         """
         super().__init__(master)
         self.is_visible = False
         self._cancel_callback = cancel_callback
+        self.loop = loop
         self.withdraw()  # Start hidden
 
     def show(self, title: str):
@@ -57,8 +60,18 @@ class DependencyProgressWindow(tk.Toplevel):
         cancel_button.pack(pady=5)
 
     def _on_cancel(self):
-        """Handles the cancel action."""
-        if messagebox.askyesno("Confirm Cancel", "Are you sure you want to cancel the download?", parent=self):
+        """Handles the cancel action by scheduling the async confirmation."""
+        self.loop.create_task(self._on_cancel_async())
+
+    async def _on_cancel_async(self):
+        """Shows a non-blocking confirmation dialog before cancelling."""
+        should_cancel = await asyncio.to_thread(
+            messagebox.askyesno,
+            "Confirm Cancel",
+            "Are you sure you want to cancel the download?",
+            parent=self
+        )
+        if should_cancel:
             self._cancel_callback()
 
     def update_progress(self, data: Dict[str, Any]):

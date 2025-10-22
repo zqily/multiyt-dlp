@@ -108,7 +108,7 @@ class YTDlpDownloaderApp:
         self.ffmpeg_status_var = tk.StringVar(value="Checking...")
 
         self.create_widgets()
-        self.dep_progress_win = DependencyProgressWindow(self.root, self.app_controller.cancel_dependency_download)
+        self.dep_progress_win = DependencyProgressWindow(self.root, self.app_controller.cancel_dependency_download, self.loop)
 
         self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
         # Run startup checks once the loop is running
@@ -135,7 +135,14 @@ class YTDlpDownloaderApp:
 
     async def handle_closing_async(self):
         """Handles the application window closing event."""
-        if self.app_controller.is_downloading and not messagebox.askyesno("Confirm Exit", "Downloads are in progress. Are you sure you want to exit?"):
+        should_close = True
+        if self.app_controller.is_downloading:
+            should_close = await asyncio.to_thread(
+                messagebox.askyesno,
+                "Confirm Exit",
+                "Downloads are in progress. Are you sure you want to exit?"
+            )
+        if not should_close:
             return
 
         ui_settings = {
@@ -143,7 +150,7 @@ class YTDlpDownloaderApp:
             'video_resolution': self.video_resolution_var.get(),
             'audio_format': self.audio_format_var.get(),
             'embed_thumbnail': self.embed_thumbnail_var.get(),
-            'last_output_path': Path(self.output_path_var.get())
+            'last_output_path': Path(self.output_path_var.get()) if self.output_path_var.get() else self.config.last_output_path
         }
         await self.app_controller.on_app_closing(ui_settings)
         self.is_destroyed = True
@@ -220,20 +227,38 @@ class YTDlpDownloaderApp:
     async def initiate_dependency_prompt(self, dep_type: str):
         if self.dep_progress_win.is_visible: return
         msg_map = {'yt-dlp': "yt-dlp not found.", 'ffmpeg': "FFmpeg is required for some features but not found."}
-        if messagebox.askyesno(f"{dep_type.upper()} Not Found", f"{msg_map.get(dep_type, 'Dependency not found.')}\n\nDownload the latest version?"):
+        should_download = await asyncio.to_thread(
+            messagebox.askyesno,
+            f"{dep_type.upper()} Not Found",
+            f"{msg_map.get(dep_type, 'Dependency not found.')}\n\nDownload the latest version?"
+        )
+        if should_download:
             await self.app_controller.initiate_dependency_download(dep_type)
 
     async def queue_downloads(self):
         urls_raw = self.url_text.get(1.0, tk.END).strip()
-        if not urls_raw: messagebox.showwarning("Input Error", "Please enter at least one URL."); return
+        if not urls_raw:
+            await asyncio.to_thread(messagebox.showwarning, "Input Error", "Please enter at least one URL.")
+            return
         valid_urls = [u for url in urls_raw.splitlines() if (u := url.strip()) and urllib.parse.urlparse(u).scheme]
-        if not valid_urls: messagebox.showwarning("Input Error", "No valid URLs provided."); return
+        if not valid_urls:
+            await asyncio.to_thread(messagebox.showwarning, "Input Error", "No valid URLs provided.")
+            return
 
         output_path = Path(self.output_path_var.get())
-        if not output_path.is_dir():
-            if not messagebox.askyesno("Create Directory?", f"Output directory does not exist:\n{output_path}\nCreate it?"): return
-            try: output_path.mkdir(parents=True, exist_ok=True)
-            except OSError as e: messagebox.showerror("Error", f"Failed to create directory: {e}"); return
+        if not await asyncio.to_thread(output_path.is_dir):
+            create_dir = await asyncio.to_thread(
+                messagebox.askyesno,
+                "Create Directory?",
+                f"Output directory does not exist:\n{output_path}\nCreate it?"
+            )
+            if not create_dir:
+                return
+            try:
+                await asyncio.to_thread(output_path.mkdir, parents=True, exist_ok=True)
+            except OSError as e:
+                await asyncio.to_thread(messagebox.showerror, "Error", f"Failed to create directory: {e}")
+                return
 
         options = {'output_path': output_path, 'filename_template': self.config.filename_template, 'download_type': self.download_type_var.get(), 'video_resolution': self.video_resolution_var.get(), 'audio_format': self.audio_format_var.get(), 'embed_thumbnail': self.embed_thumbnail_var.get()}
 
@@ -241,7 +266,12 @@ class YTDlpDownloaderApp:
         await self.app_controller.start_downloads(valid_urls, options)
 
     async def stop_downloads(self):
-        if messagebox.askyesno("Confirm Stop", "Stop all current and queued downloads?"):
+        should_stop = await asyncio.to_thread(
+            messagebox.askyesno,
+            "Confirm Stop",
+            "Stop all current and queued downloads?"
+        )
+        if should_stop:
             await self.app_controller.stop_all_downloads()
 
     async def clear_completed_list(self):
@@ -314,15 +344,14 @@ class YTDlpDownloaderApp:
 
     async def show_message(self, data: Dict[str, str]):
         handler = getattr(messagebox, f"show{data['type']}", messagebox.showinfo)
-        handler(data['title'], data['message'])
+        await asyncio.to_thread(handler, data['title'], data['message'])
 
     async def update_dependency_version(self, data: Dict[str, str]):
-        if self.settings_win and self.settings_win.winfo_exists():
-            var = self.yt_dlp_version_var if data['type'] == 'yt-dlp' else self.ffmpeg_status_var
-            var.set(data['version'])
+        var = self.yt_dlp_version_var if data['type'] == 'yt-dlp' else self.ffmpeg_status_var
+        var.set(data['version'])
 
     async def show_critical_error(self, message: str):
-        messagebox.showerror("Critical Error", message)
+        await asyncio.to_thread(messagebox.showerror, "Critical Error", message)
         self.is_destroyed = True
         self.root.destroy()
 
@@ -349,7 +378,7 @@ class YTDlpDownloaderApp:
 
         ttk.Button(button_frame, text="Go to Download Page", command=lambda: self.loop.create_task(go_to_download_async())).pack(side=tk.LEFT, expand=True, fill=tk.X, padx=(0, 5))
         ttk.Button(button_frame, text="Dismiss", command=dismiss_and_save).pack(side=tk.RIGHT, expand=True, fill=tk.X, padx=(5, 0))
-        self.update_dialog.protocol("WM_DELETE_WINDOW", dismiss_and_save); self.update_dialog.grab_set(); self.root.wait_window(self.update_dialog)
+        self.update_dialog.protocol("WM_DELETE_WINDOW", dismiss_and_save); self.update_dialog.grab_set()
 
     async def open_settings_window(self):
         if self.settings_win and self.settings_win.winfo_exists():
@@ -365,8 +394,20 @@ class YTDlpDownloaderApp:
         await self.app_controller.add_jobs_for_retry(items_to_retry_ids)
 
     def browse_output_path(self):
-        path = filedialog.askdirectory(initialdir=self.output_path_var.get(), title="Select Output Folder")
-        if path: self.output_path_var.set(path)
+        """Runs the blocking file dialog in a separate thread and schedules the result handler."""
+
+        def _run_dialog_in_thread():
+            """Blocking function to be executed in the thread pool."""
+            path = filedialog.askdirectory(
+                initialdir=self.output_path_var.get(),
+                title="Select Output Folder"
+            )
+            if path:
+                # Safely schedule the GUI update on the main event loop's thread
+                self.loop.call_soon_threadsafe(self.output_path_var.set, path)
+
+        # Run the blocking dialog in the default thread pool executor
+        self.loop.run_in_executor(None, _run_dialog_in_thread)
 
     def update_log_display(self, message: str):
         if self.is_destroyed: return

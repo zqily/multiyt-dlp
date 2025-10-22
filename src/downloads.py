@@ -38,7 +38,10 @@ class DownloadManager:
         self.max_concurrent_downloads: int = 4
         self.yt_dlp_path: Optional[Path] = None
         self.ffmpeg_path: Optional[Path] = None
-        self.cleanup_temporary_files()
+
+    async def initialize(self):
+        """Performs asynchronous initialization, such as cleaning temp files."""
+        await self.cleanup_temporary_files()
 
     def set_config(self, max_concurrent: int, yt_dlp_path: Optional[Path], ffmpeg_path: Optional[Path]):
         """Sets runtime configuration for the manager."""
@@ -129,7 +132,7 @@ class DownloadManager:
             async with self.active_processes_lock:
                 if job_id in self.active_processes: del self.active_processes[job_id]
 
-        await asyncio.to_thread(self.cleanup_temporary_files)
+        await self.cleanup_temporary_files()
         async with self.stats_lock: self.total_jobs, self.completed_jobs = 0, 0
 
     async def _url_processor_task(self):
@@ -165,14 +168,18 @@ class DownloadManager:
         except asyncio.CancelledError:
             self.logger.info("URL processor task cancelled.")
 
-    def cleanup_temporary_files(self):
+    async def cleanup_temporary_files(self):
         """Cleans up temporary download files in the dedicated temp directory."""
-        if not TEMP_DOWNLOAD_DIR.is_dir(): return
+        if not await asyncio.to_thread(TEMP_DOWNLOAD_DIR.is_dir): return
         count = 0
-        for item in TEMP_DOWNLOAD_DIR.iterdir():
+        
+        # Note: iterdir() itself is blocking and must be wrapped
+        items_to_check = await asyncio.to_thread(list, TEMP_DOWNLOAD_DIR.iterdir())
+
+        for item in items_to_check:
             if item.suffix in {".part", ".ytdl", ".webm"}:
                 try:
-                    item.unlink()
+                    await asyncio.to_thread(item.unlink)
                     count += 1
                 except OSError as e:
                     self.logger.error(f"Error deleting temp file {item.name}: {e}")
