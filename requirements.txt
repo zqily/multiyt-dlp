@@ -1,6 +1,5 @@
 requests
 packaging
 pydantic
-async-tkinter-loop
 aiohttp
 aiofiles
