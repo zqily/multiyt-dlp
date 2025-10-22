@@ -15,11 +15,11 @@ Author: zqil
 # and handle modules that PyInstaller might miss.
 a = Analysis(
     ['main.py'],  # The main entry point of the application.
-    pathex=['src'],  # CRITICAL: Tells PyInstaller to look for imports inside the 'src' directory.
+    pathex=[],    # No longer needed if running from the project root where main.py resides.
     binaries=[],   # No external binaries are bundled; yt-dlp/ffmpeg are downloaded at runtime.
     datas=[
-        ('icon.ico', '.')  # Bundles 'icon.ico' into the app's root (_MEIPASS) directory
-                           # so resource_path('icon.ico') can find it.
+        ('src/resources/icon.ico', 'resources')  # Bundles 'icon.ico' into a 'resources' folder inside the app.
+                                                 # Requires updating resource_path() call to 'resources/icon.ico'.
     ],
     hiddenimports=[
         # PRECAUTION: The 'packaging' library is used for version checks and is
@@ -34,6 +34,16 @@ a = Analysis(
         'pydantic.main',
         'pydantic.networks',
         'pydantic.types',
+
+        # ADDED FOR ROBUSTNESS: aiohttp and its dependencies are often missed.
+        # This prevents runtime errors when making network requests for updates or downloads.
+        'aiohttp',
+        'aiohttp.frozenlist',
+        'aiohttp.client_exceptions',
+        'aiohttp_charset_normalizer',
+        'async_timeout',
+        'multidict',
+        'yarl',
     ],
     hookspath=[],
     hooksconfig={},
@@ -53,9 +63,10 @@ pyz = PYZ(a.pure)
 exe = EXE(
     pyz,
     a.scripts,
+    [], # Binaries are not collected from Analysis
+    [], # Datas are not collected from Analysis
     a.binaries,
     a.datas,
-    [],
     name='Multiyt-dlp',
     debug=False,
     bootloader_ignore_signals=False,
@@ -73,5 +84,6 @@ exe = EXE(
     entitlements_file=None,
 
     # This sets the application icon for the .exe file itself in the file explorer.
-    icon='icon.ico',
+    # Assumes icon.ico is in the same directory as the spec file.
+    icon='src/resources/icon.ico',
 )
