@@ -383,7 +383,7 @@ class YTDlpDownloaderApp:
     async def open_settings_window(self):
         if self.settings_win and self.settings_win.winfo_exists():
             self.settings_win.lift(); return
-        self.settings_win = SettingsWindow(master=self.root, app_controller=self.app_controller, config=self.config, yt_dlp_var=self.yt_dlp_version_var, ffmpeg_var=self.ffmpeg_status_var)
+        self.settings_win = SettingsWindow(master=self.root, app_controller=self.app_controller, config=self.config, yt_dlp_var=self.yt_dlp_version_var, ffmpeg_var=self.ffmpeg_status_var, loop=self.loop)
 
     async def open_output_folder(self):
         await self.app_controller.open_folder(self.output_path_var.get())

@@ -15,7 +15,7 @@ from ..controller import AppController
 class SettingsWindow(tk.Toplevel):
     """A Toplevel window for managing application settings."""
 
-    def __init__(self, master: tk.Tk, app_controller: AppController, config: Settings, yt_dlp_var: tk.StringVar, ffmpeg_var: tk.StringVar):
+    def __init__(self, master: tk.Tk, app_controller: AppController, config: Settings, yt_dlp_var: tk.StringVar, ffmpeg_var: tk.StringVar, loop: asyncio.AbstractEventLoop):
         """
         Initializes the Settings window.
 
@@ -25,10 +25,12 @@ class SettingsWindow(tk.Toplevel):
             config: The current application Settings object.
             yt_dlp_var: StringVar from main app for yt-dlp version.
             ffmpeg_var: StringVar from main app for FFmpeg status.
+            loop: The asyncio event loop.
         """
         super().__init__(master)
         self.app_controller = app_controller
         self.config = config
+        self.loop = loop
         self.is_updating_dependency = False
         self.logger = logging.getLogger(__name__)
 
@@ -45,7 +47,7 @@ class SettingsWindow(tk.Toplevel):
         self._create_widgets()
         self.protocol("WM_DELETE_WINDOW", self.destroy)
         
-        task = asyncio.create_task(self.check_dependency_versions())
+        task = self.loop.create_task(self.check_dependency_versions())
         task.add_done_callback(self._handle_task_exception)
 
     def _handle_task_exception(self, task: asyncio.Task) -> None:
@@ -84,12 +86,12 @@ class SettingsWindow(tk.Toplevel):
         ttk.Label(update_frame, text="yt-dlp:").grid(row=0, column=0, sticky=tk.W, padx=5); ttk.Label(update_frame, textvariable=self.yt_dlp_version_var).grid(row=0, column=1, sticky=tk.W, padx=5)
         ttk.Label(update_frame, text="FFmpeg:").grid(row=1, column=0, sticky=tk.W, padx=5); ttk.Label(update_frame, textvariable=self.ffmpeg_status_var, wraplength=400).grid(row=1, column=1, sticky=tk.W, padx=5)
         update_buttons_frame = ttk.Frame(update_frame); update_buttons_frame.grid(row=2, column=0, columnspan=2, pady=(10,0))
-        self.yt_dlp_update_button = ttk.Button(update_buttons_frame, text="Update yt-dlp", command=lambda: asyncio.create_task(self.start_yt_dlp_update())); self.yt_dlp_update_button.pack(side=tk.LEFT, padx=5)
-        self.ffmpeg_update_button = ttk.Button(update_buttons_frame, text="Download/Update FFmpeg", command=lambda: asyncio.create_task(self.start_ffmpeg_update())); self.ffmpeg_update_button.pack(side=tk.LEFT, padx=5)
+        self.yt_dlp_update_button = ttk.Button(update_buttons_frame, text="Update yt-dlp", command=lambda: self.loop.create_task(self.start_yt_dlp_update())); self.yt_dlp_update_button.pack(side=tk.LEFT, padx=5)
+        self.ffmpeg_update_button = ttk.Button(update_buttons_frame, text="Download/Update FFmpeg", command=lambda: self.loop.create_task(self.start_ffmpeg_update())); self.ffmpeg_update_button.pack(side=tk.LEFT, padx=5)
 
         buttons_frame = ttk.Frame(settings_frame)
         buttons_frame.grid(row=7, column=0, columnspan=2, pady=15, sticky=tk.E)
-        ttk.Button(buttons_frame, text="Save", command=lambda: asyncio.create_task(self._save_and_close())).pack(side=tk.LEFT, padx=5)
+        ttk.Button(buttons_frame, text="Save", command=lambda: self.loop.create_task(self._save_and_close())).pack(side=tk.LEFT, padx=5)
         ttk.Button(buttons_frame, text="Cancel", command=self.destroy).pack(side=tk.LEFT)
 
     async def check_dependency_versions(self):
@@ -101,7 +103,7 @@ class SettingsWindow(tk.Toplevel):
     async def _save_and_close(self):
         """Validates settings, saves them, and closes the window."""
         if self.is_updating_dependency:
-            await asyncio.to_thread(messagebox.showwarning, "Busy", "Cannot save settings while updating.", parent=self)
+            messagebox.showwarning("Busy", "Cannot save settings while updating.", parent=self)
             return
 
         new_settings_data = {
@@ -113,10 +115,10 @@ class SettingsWindow(tk.Toplevel):
 
         success, message = self.app_controller.save_settings(new_settings_data)
         if success:
-            await asyncio.to_thread(messagebox.showinfo, "Settings Saved", message, parent=self)
+            messagebox.showinfo("Settings Saved", message, parent=self)
             self.destroy()
         else:
-            await asyncio.to_thread(messagebox.showerror, "Validation Error", message, parent=self)
+            messagebox.showerror("Validation Error", message, parent=self)
 
     def _toggle_update_buttons(self, enabled: bool):
         """Enables or disables the dependency update buttons."""
