@@ -1,7 +1,7 @@
 """Manages the discovery, download, and updates for yt-dlp and FFmpeg."""
 import sys
 import shutil
-import threading
+import asyncio
 import subprocess
 import urllib.parse
 import zipfile
@@ -10,13 +10,13 @@ import time
 import tempfile
 import logging
 from pathlib import Path
-from concurrent.futures import ThreadPoolExecutor, as_completed, wait
-from typing import Optional, List, Tuple, Callable, Any
+from typing import Optional, List, Tuple, Callable, Any, Dict, Coroutine
 
-import requests
+import aiohttp
+import aiofiles
 
 from .constants import (
-    YT_DLP_URLS, FFMPEG_URLS, REQUEST_HEADERS, REQUEST_TIMEOUTS, APP_PATH, SUBPROCESS_CREATION_FLAGS
+    YT_DLP_URLS, FFMPEG_URLS, REQUEST_HEADERS, APP_PATH, SUBPROCESS_CREATION_FLAGS
 )
 from .exceptions import DownloadCancelledError
 
@@ -27,182 +27,118 @@ class DependencyManager:
     DOWNLOAD_CHUNKS = 8
     DOWNLOAD_RETRY_ATTEMPTS = 3
 
-    def __init__(self, event_callback: Callable[[Tuple[str, Any]], None]):
+    def __init__(self, event_callback: Callable[[Tuple[str, Any]], Coroutine[Any, Any, None]]):
         """
         Initializes the DependencyManager.
 
         Args:
-            event_callback: The function to call with manager events.
+            event_callback: The async function to call with manager events.
         """
         self.event_callback = event_callback
         self.logger = logging.getLogger(__name__)
         self.yt_dlp_path: Optional[Path] = self.find_yt_dlp()
         self.ffmpeg_path: Optional[Path] = self.find_ffmpeg()
-        self.stop_event = threading.Event()
+        self.download_task: Optional[asyncio.Task] = None
 
     def cancel_download(self):
         """Signals the download process to stop."""
-        self.logger.info("Cancellation signal sent to dependency downloader.")
-        self.stop_event.set()
+        if self.download_task and not self.download_task.done():
+            self.logger.info("Cancellation signal sent to dependency downloader.")
+            self.download_task.cancel()
 
     def find_yt_dlp(self) -> Optional[Path]:
-        """
-        Finds the yt-dlp executable.
-
-        Returns:
-            A Path object to the executable, or None if not found.
-        """
+        """Finds the yt-dlp executable."""
         self.yt_dlp_path = self._find_executable('yt-dlp')
         return self.yt_dlp_path
 
     def find_ffmpeg(self) -> Optional[Path]:
-        """
-        Finds the ffmpeg executable.
-
-        Returns:
-            A Path object to the executable, or None if not found.
-        """
+        """Finds the ffmpeg executable."""
         self.ffmpeg_path = self._find_executable('ffmpeg')
         return self.ffmpeg_path
 
     def _find_executable(self, name: str) -> Optional[Path]:
-        """
-        Finds an executable, preferring a locally managed one.
-
-        Args:
-            name: The name of the executable (e.g., 'yt-dlp').
-
-        Returns:
-            A Path object to the executable, or None if not found.
-        """
+        """Finds an executable, preferring a locally managed one."""
         local_path = APP_PATH / (f'{name}.exe' if sys.platform == 'win32' else name)
         if local_path.exists():
             return local_path
-
         path_in_system = shutil.which(name)
-        if path_in_system:
-            return Path(path_in_system)
-
-        return None
+        return Path(path_in_system) if path_in_system else None
 
     def get_version(self, executable_path: Optional[Path]) -> str:
-        """
-        Returns the version of a given executable by running it with '--version'.
-
-        Args:
-            executable_path: Path to the executable.
-
-        Returns:
-            A string containing the version, or an error/status message.
-        """
-        if not executable_path or not executable_path.exists():
-            return "Not found"
+        """Returns the version of an executable by running it with '--version'."""
+        if not executable_path or not executable_path.exists(): return "Not found"
         try:
             command: List[str] = [str(executable_path)]
-            if 'ffmpeg' in executable_path.name.lower():
-                command.append('-version')
-            else:
-                command.append('--version')
+            if 'ffmpeg' in executable_path.name.lower(): command.append('-version')
+            else: command.append('--version')
 
             kwargs = {'text': True, 'encoding': 'utf-8', 'errors': 'replace', 'stderr': subprocess.STDOUT}
-            if sys.platform == 'win32':
-                kwargs['creationflags'] = SUBPROCESS_CREATION_FLAGS
-
+            if sys.platform == 'win32': kwargs['creationflags'] = SUBPROCESS_CREATION_FLAGS
             result = subprocess.check_output(command, timeout=15, **kwargs)
             return result.strip().split('\n')[0]
-        except (FileNotFoundError, PermissionError):
-            return "Not found or no permission"
-        except subprocess.TimeoutExpired:
-            self.logger.warning(f"Version check for {executable_path} timed out.")
-            return "Version check timed out"
-        except (subprocess.CalledProcessError, OSError) as e:
-            self.logger.error(f"Error checking version for {executable_path}: {e}")
-            return "Cannot execute"
-        except Exception:
-            self.logger.exception(f"Unexpected error checking version for {executable_path}")
-            return "Error checking version"
+        except (FileNotFoundError, PermissionError): return "Not found or no permission"
+        except subprocess.TimeoutExpired: return "Version check timed out"
+        except (subprocess.CalledProcessError, OSError): return "Cannot execute"
+        except Exception: return "Error checking version"
 
-    def _download_file_with_progress(self, url: str, save_path: Path, dep_type: str):
-        """
-        Downloads a file, showing progress and handling chunked downloading.
+    async def _download_file_with_progress(self, session: aiohttp.ClientSession, url: str, save_path: Path, dep_type: str):
+        """Downloads a file, showing progress and handling chunked downloading."""
+        await self.event_callback(('dependency_progress', {'type': dep_type, 'status': 'determinate', 'text': 'Preparing download...', 'value': 0}))
 
-        Args:
-            url: The URL to download from.
-            save_path: The local path to save the file to.
-            dep_type: The type of dependency being downloaded (e.g., 'yt-dlp').
-
-        Raises:
-            DownloadCancelledError: If the download is cancelled by the user.
-            requests.exceptions.RequestException: If a network error occurs.
-        """
-        self.event_callback(('dependency_progress', {'type': dep_type, 'status': 'determinate', 'text': 'Preparing download...', 'value': 0}))
-
-        total_size = 0
-        supports_ranges = False
+        total_size, supports_ranges = 0, False
         try:
-            with requests.head(url, headers=REQUEST_HEADERS, timeout=REQUEST_TIMEOUTS[0], allow_redirects=True) as r:
+            async with session.head(url, headers=REQUEST_HEADERS, timeout=10, allow_redirects=True) as r:
                 r.raise_for_status()
                 total_size = int(r.headers.get('content-length', 0))
                 supports_ranges = r.headers.get('accept-ranges', '').lower() == 'bytes'
-        except requests.exceptions.RequestException as e:
+        except aiohttp.ClientError as e:
             self.logger.warning(f"HEAD request failed: {e}. Proceeding with single-stream download.")
 
         use_chunked = total_size > self.CHUNKED_DOWNLOAD_THRESHOLD and supports_ranges
-
         try:
             if use_chunked:
                 self.logger.info(f"Starting chunked download for {dep_type} ({total_size/1024/1024:.1f} MB)...")
-                self._download_file_chunked(url, save_path, total_size, dep_type)
+                await self._download_file_chunked(session, url, save_path, total_size, dep_type)
             else:
-                log_msg = f"Starting single-stream download for {dep_type}."
-                if 0 < total_size <= self.CHUNKED_DOWNLOAD_THRESHOLD: log_msg += " (File is small)"
-                if total_size > 0 and not supports_ranges: log_msg += " (Server doesn't support ranged requests)"
-                self.logger.info(log_msg)
-                self._download_file_single_stream(url, save_path, dep_type)
-        except (requests.exceptions.RequestException, IOError) as e:
+                self.logger.info(f"Starting single-stream download for {dep_type}.")
+                await self._download_file_single_stream(session, url, save_path, dep_type)
+        except (aiohttp.ClientError, IOError) as e:
             self.logger.exception(f"Download for {dep_type} failed: {e}. Falling back to single-stream.")
             if save_path.exists():
                 try: save_path.unlink()
                 except OSError: pass
-            self._download_file_single_stream(url, save_path, dep_type)
+            await self._download_file_single_stream(session, url, save_path, dep_type)
 
-        self.event_callback(('dependency_progress', {
-            'type': dep_type, 'status': 'determinate',
-            'text': 'Download complete. Preparing...', 'value': 100
-        }))
+        await self.event_callback(('dependency_progress', {'type': dep_type, 'status': 'determinate', 'text': 'Download complete. Preparing...', 'value': 100}))
 
-    def _download_file_single_stream(self, url: str, save_path: Path, dep_type: str):
+    async def _download_file_single_stream(self, session: aiohttp.ClientSession, url: str, save_path: Path, dep_type: str):
         """Downloads a file as a single stream, with retries."""
         for attempt in range(self.DOWNLOAD_RETRY_ATTEMPTS):
-            if self.stop_event.is_set(): raise DownloadCancelledError("Download cancelled before starting.")
             try:
-                with requests.get(url, stream=True, headers=REQUEST_HEADERS, timeout=REQUEST_TIMEOUTS) as r:
+                async with session.get(url, headers=REQUEST_HEADERS, timeout=aiohttp.ClientTimeout(total=None, sock_read=60)) as r:
                     r.raise_for_status()
                     total_size = int(r.headers.get('Content-Length', 0))
                     if total_size <= 0:
-                        self.event_callback(('dependency_progress', {'type': dep_type, 'status': 'indeterminate', 'text': f'Downloading {dep_type}... (Size unknown)'}))
+                        await self.event_callback(('dependency_progress', {'type': dep_type, 'status': 'indeterminate', 'text': f'Downloading {dep_type}... (Size unknown)'}))
 
-                    bytes_downloaded, chunk_size = 0, 8192
-                    start_time = time.time()
-                    with save_path.open('wb') as f_out:
-                        for chunk in r.iter_content(chunk_size=chunk_size):
-                            if self.stop_event.is_set(): raise DownloadCancelledError("Download cancelled during transfer.")
-                            f_out.write(chunk)
+                    bytes_downloaded, start_time = 0, time.monotonic()
+                    async with aiofiles.open(save_path, 'wb') as f_out:
+                        async for chunk in r.content.iter_chunked(8192):
+                            await f_out.write(chunk)
                             bytes_downloaded += len(chunk)
                             if total_size > 0:
                                 progress = (bytes_downloaded / total_size) * 100
-                                elapsed = time.time() - start_time
+                                elapsed = time.monotonic() - start_time
                                 speed = (bytes_downloaded / elapsed) / 1024 / 1024 if elapsed > 0 else 0
                                 text = f'Downloading... {bytes_downloaded/1024/1024:.1f}/{total_size/1024/1024:.1f} MB ({speed:.1f} MB/s)'
-                                self.event_callback(('dependency_progress', {'type': dep_type, 'status': 'determinate', 'text': text, 'value': progress}))
+                                await self.event_callback(('dependency_progress', {'type': dep_type, 'status': 'determinate', 'text': text, 'value': progress}))
                 return
-            except DownloadCancelledError: raise
-            except requests.exceptions.RequestException as e:
+            except aiohttp.ClientError as e:
                 self.logger.error(f"Single-stream error on attempt {attempt + 1}: {e}")
-                if attempt < self.DOWNLOAD_RETRY_ATTEMPTS - 1: time.sleep(2 ** attempt)
+                if attempt < self.DOWNLOAD_RETRY_ATTEMPTS - 1: await asyncio.sleep(2 ** attempt)
                 else: raise e
 
-    def _download_file_chunked(self, url: str, save_path: Path, total_size: int, dep_type: str):
+    async def _download_file_chunked(self, session: aiohttp.ClientSession, url: str, save_path: Path, total_size: int, dep_type: str):
         """Downloads a file in parallel chunks."""
         chunk_size = total_size // self.DOWNLOAD_CHUNKS
         ranges = [(i * chunk_size, (i + 1) * chunk_size - 1) for i in range(self.DOWNLOAD_CHUNKS - 1)]
@@ -210,109 +146,97 @@ class DependencyManager:
 
         with tempfile.TemporaryDirectory(prefix="multiyt-dlp-") as temp_dir:
             temp_path = Path(temp_dir)
-            progress, progress_lock, start_time = [0] * self.DOWNLOAD_CHUNKS, threading.Lock(), time.time()
-            with ThreadPoolExecutor(max_workers=self.DOWNLOAD_CHUNKS) as executor:
-                futures = {executor.submit(self._download_chunk, url, temp_path / f'chunk_{i}', ranges[i], i, progress, progress_lock) for i in range(self.DOWNLOAD_CHUNKS)}
+            progress, start_time = [0] * self.DOWNLOAD_CHUNKS, time.monotonic()
+            tasks = [self._download_chunk(session, url, temp_path / f'chunk_{i}', ranges[i], i, progress) for i in range(self.DOWNLOAD_CHUNKS)]
+            
+            progress_reporter = asyncio.create_task(self._report_chunked_progress(progress, total_size, start_time, dep_type))
+            try:
+                await asyncio.gather(*tasks)
+            finally:
+                progress_reporter.cancel()
 
-                while True:
-                    _, not_done = wait(futures, timeout=0.5)
+            await self.event_callback(('dependency_progress', {'type': dep_type, 'status': 'indeterminate', 'text': 'Assembling file...'}))
+            await self._assemble_chunks(save_path, temp_path)
 
-                    with progress_lock: bytes_downloaded = sum(progress)
-                    if total_size > 0:
-                        percent = (bytes_downloaded / total_size) * 100
-                        elapsed = time.time() - start_time
-                        speed = (bytes_downloaded / elapsed) / 1024 / 1024 if elapsed > 0 else 0
-                        text = f'Downloading... {bytes_downloaded/1024/1024:.1f}/{total_size/1024/1024:.1f} MB ({speed:.1f} MB/s)'
-                        self.event_callback(('dependency_progress', {'type': dep_type, 'status': 'determinate', 'text': text, 'value': percent}))
+    async def _report_chunked_progress(self, progress: list, total_size: int, start_time: float, dep_type: str):
+        """Periodically reports progress for chunked downloads."""
+        while True:
+            try:
+                bytes_downloaded = sum(progress)
+                percent = (bytes_downloaded / total_size) * 100
+                elapsed = time.monotonic() - start_time
+                speed = (bytes_downloaded / elapsed) / 1024 / 1024 if elapsed > 0 else 0
+                text = f'Downloading... {bytes_downloaded/1024/1024:.1f}/{total_size/1024/1024:.1f} MB ({speed:.1f} MB/s)'
+                await self.event_callback(('dependency_progress', {'type': dep_type, 'status': 'determinate', 'text': text, 'value': percent}))
+                await asyncio.sleep(0.5)
+            except asyncio.CancelledError:
+                break
 
-                    if self.stop_event.is_set(): break
-                    if not not_done: break
-
-                for future in as_completed(futures):
-                    future.result() # Raises any exception from the thread
-
-            if self.stop_event.is_set(): raise DownloadCancelledError("Download cancelled before file assembly.")
-
-            self.event_callback(('dependency_progress', {'type': dep_type, 'status': 'indeterminate', 'text': 'Assembling file...'}))
-            self._assemble_chunks(save_path, temp_path)
-
-    def _download_chunk(self, url: str, chunk_path: Path, byte_range: Tuple[int, int], chunk_idx: int, progress: list, lock: threading.Lock):
+    async def _download_chunk(self, session: aiohttp.ClientSession, url: str, chunk_path: Path, byte_range: Tuple[int, int], chunk_idx: int, progress: list):
         """Downloads a single chunk of a file."""
         for attempt in range(self.DOWNLOAD_RETRY_ATTEMPTS):
-            if self.stop_event.is_set(): raise DownloadCancelledError(f"Chunk {chunk_idx} cancelled.")
             try:
                 headers = REQUEST_HEADERS.copy()
                 headers['Range'] = f'bytes={byte_range[0]}-{byte_range[1]}'
                 bytes_dl = 0
-                with requests.get(url, headers=headers, stream=True, timeout=REQUEST_TIMEOUTS) as r:
+                async with session.get(url, headers=headers, timeout=aiohttp.ClientTimeout(total=None, sock_read=60)) as r:
                     r.raise_for_status()
-                    with chunk_path.open('wb') as f:
-                        for part in r.iter_content(chunk_size=8192):
-                            if self.stop_event.is_set(): raise DownloadCancelledError(f"Chunk {chunk_idx} cancelled.")
-                            f.write(part)
+                    async with aiofiles.open(chunk_path, 'wb') as f:
+                        async for part in r.content.iter_chunked(8192):
+                            await f.write(part)
                             bytes_dl += len(part)
-                            with lock: progress[chunk_idx] = bytes_dl
+                            progress[chunk_idx] = bytes_dl
                 return
-            except DownloadCancelledError: raise
-            except requests.exceptions.RequestException as e:
+            except aiohttp.ClientError as e:
                 self.logger.error(f"Error on chunk {chunk_idx}, attempt {attempt + 1}: {e}")
-                if attempt < self.DOWNLOAD_RETRY_ATTEMPTS - 1: time.sleep(2 ** attempt)
+                if attempt < self.DOWNLOAD_RETRY_ATTEMPTS - 1: await asyncio.sleep(2 ** attempt)
                 else: raise e
 
-    def _assemble_chunks(self, save_path: Path, temp_dir: Path):
+    async def _assemble_chunks(self, save_path: Path, temp_dir: Path):
         """Assembles downloaded chunks into a single file."""
-        with save_path.open('wb') as f_out:
+        async with aiofiles.open(save_path, 'wb') as f_out:
             for i in range(self.DOWNLOAD_CHUNKS):
-                with (temp_dir / f'chunk_{i}').open('rb') as f_in:
-                    shutil.copyfileobj(f_in, f_out)
+                async with aiofiles.open(temp_dir / f'chunk_{i}', 'rb') as f_in:
+                    while chunk := await f_in.read(8192*4):
+                        await f_out.write(chunk)
 
-    def install_or_update_yt_dlp(self):
-        """Starts the yt-dlp download/update process in a new thread."""
-        threading.Thread(target=self._install_or_update_yt_dlp_thread, daemon=True, name="yt-dlp-Installer").start()
-
-    def _install_or_update_yt_dlp_thread(self):
-        """The actual logic for downloading and setting up yt-dlp."""
-        self.stop_event.clear()
-        platform = sys.platform
-        if platform not in YT_DLP_URLS:
-            self.event_callback(('dependency_done', {'type': 'yt-dlp', 'success': False, 'error': f"Unsupported OS: {platform}"}))
-            return
+    async def install_or_update_yt_dlp(self) -> Dict[str, Any]:
+        """Coroutine for downloading and setting up yt-dlp."""
+        self.download_task = asyncio.current_task()
         try:
+            platform = sys.platform
+            if platform not in YT_DLP_URLS:
+                return {'type': 'yt-dlp', 'success': False, 'error': f"Unsupported OS: {platform}"}
+            
             url = YT_DLP_URLS[platform]
             filename = Path(urllib.parse.unquote(url)).name
             save_path = APP_PATH / ('yt-dlp' if platform == 'darwin' and filename == 'yt-dlp_macos' else filename)
 
-            self._download_file_with_progress(url, save_path, 'yt-dlp')
+            async with aiohttp.ClientSession() as session:
+                await self._download_file_with_progress(session, url, save_path, 'yt-dlp')
 
             if platform in ['linux', 'darwin']:
-                save_path.chmod(0o755)
+                await asyncio.to_thread(save_path.chmod, 0o755)
 
             self.yt_dlp_path = save_path
-            self.event_callback(('dependency_done', {'type': 'yt-dlp', 'success': True, 'path': str(save_path)}))
-        except DownloadCancelledError:
+            return {'type': 'yt-dlp', 'success': True, 'path': str(save_path)}
+        except asyncio.CancelledError:
             self.logger.info("yt-dlp download cancelled by user.")
-            self.event_callback(('dependency_done', {'type': 'yt-dlp', 'success': False, 'error': "Download cancelled by user."}))
-        except requests.exceptions.RequestException as e:
-            self.logger.exception("Network error during yt-dlp download.")
-            self.event_callback(('dependency_done', {'type': 'yt-dlp', 'success': False, 'error': f"Network error: {e}"}))
+            raise DownloadCancelledError("Download cancelled by user.")
+        except aiohttp.ClientError as e:
+            return {'type': 'yt-dlp', 'success': False, 'error': f"Network error: {e}"}
         except (IOError, OSError) as e:
-            self.logger.exception("File system error during yt-dlp installation.")
-            self.event_callback(('dependency_done', {'type': 'yt-dlp', 'success': False, 'error': f"File error: {e}"}))
+            return {'type': 'yt-dlp', 'success': False, 'error': f"File error: {e}"}
         except Exception:
             self.logger.exception("An unexpected error occurred during yt-dlp download.")
-            self.event_callback(('dependency_done', {'type': 'yt-dlp', 'success': False, 'error': "An unexpected error occurred."}))
+            return {'type': 'yt-dlp', 'success': False, 'error': "An unexpected error occurred."}
 
-    def download_ffmpeg(self):
-        """Starts the FFmpeg download process in a new thread."""
-        threading.Thread(target=self._download_ffmpeg_thread, daemon=True, name="FFmpeg-Installer").start()
-
-    def _download_ffmpeg_thread(self):
-        """The actual logic for downloading and extracting FFmpeg."""
-        self.stop_event.clear()
+    async def download_ffmpeg(self) -> Dict[str, Any]:
+        """Coroutine for downloading and extracting FFmpeg."""
+        self.download_task = asyncio.current_task()
         platform = sys.platform
         if platform not in FFMPEG_URLS:
-            self.event_callback(('dependency_done', {'type': 'ffmpeg', 'success': False, 'error': f"Unsupported OS: {platform}"}))
-            return
+            return {'type': 'ffmpeg', 'success': False, 'error': f"Unsupported OS: {platform}"}
 
         url = FFMPEG_URLS[platform]
         final_ffmpeg_name = 'ffmpeg.exe' if platform == 'win32' else 'ffmpeg'
@@ -324,45 +248,35 @@ class DependencyManager:
                 archive_path = temp_dir / Path(urllib.parse.unquote(url)).name
                 extract_dir = temp_dir / "ffmpeg_extracted"
 
-                self._download_file_with_progress(url, archive_path, 'ffmpeg')
+                async with aiohttp.ClientSession() as session:
+                    await self._download_file_with_progress(session, url, archive_path, 'ffmpeg')
 
-                self.event_callback(('dependency_progress', {'type': 'ffmpeg', 'status': 'indeterminate', 'text': 'Extracting FFmpeg...'}))
-                extract_dir.mkdir(exist_ok=True)
+                await self.event_callback(('dependency_progress', {'type': 'ffmpeg', 'status': 'indeterminate', 'text': 'Extracting FFmpeg...'}))
+                await asyncio.to_thread(extract_dir.mkdir, exist_ok=True)
 
                 if archive_path.suffix == '.zip':
-                    with zipfile.ZipFile(archive_path, 'r') as zip_ref: zip_ref.extractall(extract_dir)
+                    await asyncio.to_thread(zipfile.ZipFile(archive_path, 'r').extractall, extract_dir)
                 elif '.tar.xz' in archive_path.name:
-                    with tarfile.open(archive_path, 'r:xz') as tar_ref: tar_ref.extractall(path=extract_dir)
+                    await asyncio.to_thread(tarfile.open(archive_path, 'r:xz').extractall, path=extract_dir)
 
-                self.event_callback(('dependency_progress', {'type': 'ffmpeg', 'status': 'indeterminate', 'text': 'Locating executable...'}))
-
+                await self.event_callback(('dependency_progress', {'type': 'ffmpeg', 'status': 'indeterminate', 'text': 'Locating executable...'}))
                 found_files = list(extract_dir.rglob(final_ffmpeg_name))
                 if not found_files: raise FileNotFoundError(f"Could not find '{final_ffmpeg_name}' in archive.")
                 ffmpeg_exe_path = found_files[0]
 
-                if final_ffmpeg_path.exists(): final_ffmpeg_path.unlink()
-                shutil.move(str(ffmpeg_exe_path), str(final_ffmpeg_path))
+                if final_ffmpeg_path.exists(): await asyncio.to_thread(final_ffmpeg_path.unlink)
+                await asyncio.to_thread(shutil.move, str(ffmpeg_exe_path), str(final_ffmpeg_path))
 
-                if platform in ['linux', 'darwin']: final_ffmpeg_path.chmod(0o755)
-
+                if platform in ['linux', 'darwin']: await asyncio.to_thread(final_ffmpeg_path.chmod, 0o755)
                 self.ffmpeg_path = final_ffmpeg_path
-                self.event_callback(('dependency_done', {'type': 'ffmpeg', 'success': True, 'path': str(final_ffmpeg_path)}))
-
-            except DownloadCancelledError:
+                return {'type': 'ffmpeg', 'success': True, 'path': str(final_ffmpeg_path)}
+            except asyncio.CancelledError:
                 self.logger.info("FFmpeg download cancelled by user.")
-                self.event_callback(('dependency_done', {'type': 'ffmpeg', 'success': False, 'error': "Download cancelled by user."}))
-            except requests.exceptions.RequestException as e:
-                self.logger.exception("Network error during FFmpeg download.")
-                self.event_callback(('dependency_done', {'type': 'ffmpeg', 'success': False, 'error': f"Network error: {e}"}))
-            except (zipfile.BadZipFile, tarfile.ReadError) as e:
-                self.logger.exception("Error extracting FFmpeg archive.")
-                self.event_callback(('dependency_done', {'type': 'ffmpeg', 'success': False, 'error': f"Archive error: {e}"}))
-            except FileNotFoundError as e:
-                self.logger.exception("Could not find FFmpeg executable in extracted files.")
-                self.event_callback(('dependency_done', {'type': 'ffmpeg', 'success': False, 'error': str(e)}))
-            except (IOError, OSError) as e:
-                self.logger.exception("File system error during FFmpeg installation.")
-                self.event_callback(('dependency_done', {'type': 'ffmpeg', 'success': False, 'error': f"File error: {e}"}))
+                raise DownloadCancelledError("Download cancelled by user.")
+            except aiohttp.ClientError as e: return {'type': 'ffmpeg', 'success': False, 'error': f"Network error: {e}"}
+            except (zipfile.BadZipFile, tarfile.ReadError) as e: return {'type': 'ffmpeg', 'success': False, 'error': f"Archive error: {e}"}
+            except FileNotFoundError as e: return {'type': 'ffmpeg', 'success': False, 'error': str(e)}
+            except (IOError, OSError) as e: return {'type': 'ffmpeg', 'success': False, 'error': f"File error: {e}"}
             except Exception:
                 self.logger.exception("An unexpected error occurred during FFmpeg download.")
-                self.event_callback(('dependency_done', {'type': 'ffmpeg', 'success': False, 'error': "An unexpected error occurred."}))
+                return {'type': 'ffmpeg', 'success': False, 'error': "An unexpected error occurred."}

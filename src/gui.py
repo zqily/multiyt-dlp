@@ -6,6 +6,7 @@ import queue
 import sys
 import urllib.parse
 import logging
+import asyncio
 from pathlib import Path
 from typing import Dict, Any, List, Optional
 
@@ -81,7 +82,7 @@ class YTDlpDownloaderApp:
 
         Args:
             root: The root Tkinter window.
-            gui_queue: The queue for cross-thread GUI communication.
+            gui_queue: The queue for cross-thread GUI communication (for logging).
             app_controller: The central application controller.
             config: The loaded application settings.
         """
@@ -95,6 +96,7 @@ class YTDlpDownloaderApp:
         self.log_formatter = logging.Formatter('%(asctime)s - %(levelname)-8s - %(name)-25s - %(message)s')
         self.app_controller = app_controller
         self.config = config
+        self.app_controller.set_gui(self)
 
         self.settings_win: Optional[SettingsWindow] = None
         self.update_dialog: Optional[tk.Toplevel] = None
@@ -106,11 +108,24 @@ class YTDlpDownloaderApp:
         self.create_widgets()
         self.dep_progress_win = DependencyProgressWindow(self.root, self.app_controller.cancel_dependency_download)
 
-        self.process_gui_queue()
         self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
-        self.set_status("Ready")
+
+    async def main_async_loop(self):
+        """The main async loop for the application."""
+        # Set initial status now that the loop is running.
+        await self.set_status("Ready")
+        # Run startup checks once, right after the loop has started.
+        await self.app_controller.run_startup_checks()
+        while not self.is_destroyed:
+            self.process_log_queue()
+            self.root.update()
+            await asyncio.sleep(0.01)
 
     def on_closing(self):
+        """Synchronous wrapper for the async closing logic."""
+        asyncio.create_task(self.handle_closing_async())
+
+    async def handle_closing_async(self):
         """Handles the application window closing event."""
         if self.app_controller.is_downloading and not messagebox.askyesno("Confirm Exit", "Downloads are in progress. Are you sure you want to exit?"):
             return
@@ -122,7 +137,7 @@ class YTDlpDownloaderApp:
             'embed_thumbnail': self.embed_thumbnail_var.get(),
             'last_output_path': Path(self.output_path_var.get())
         }
-        self.app_controller.on_app_closing(ui_settings)
+        await self.app_controller.on_app_closing(ui_settings)
         self.is_destroyed = True
         self.root.destroy()
 
@@ -157,10 +172,10 @@ class YTDlpDownloaderApp:
         self.update_options_ui()
 
         action_frame = ttk.Frame(main_frame); action_frame.pack(fill=tk.X, pady=10); action_frame.columnconfigure(0, weight=1)
-        self.download_button = ttk.Button(action_frame, text="Add URLs to Queue & Download", command=self.queue_downloads); self.download_button.grid(row=0, column=0, sticky=tk.EW)
-        self.stop_button = ttk.Button(action_frame, text="Stop All", command=self.stop_downloads, state='disabled'); self.stop_button.grid(row=0, column=1, padx=5)
-        self.clear_button = ttk.Button(action_frame, text="Clear Completed", command=self.clear_completed_list); self.clear_button.grid(row=0, column=2, padx=5)
-        self.settings_button = ttk.Button(action_frame, text="Settings", command=self.open_settings_window); self.settings_button.grid(row=0, column=3, padx=(5, 0))
+        self.download_button = ttk.Button(action_frame, text="Add URLs to Queue & Download", command=lambda: asyncio.create_task(self.queue_downloads())); self.download_button.grid(row=0, column=0, sticky=tk.EW)
+        self.stop_button = ttk.Button(action_frame, text="Stop All", command=lambda: asyncio.create_task(self.stop_downloads()), state='disabled'); self.stop_button.grid(row=0, column=1, padx=5)
+        self.clear_button = ttk.Button(action_frame, text="Clear Completed", command=lambda: asyncio.create_task(self.clear_completed_list())); self.clear_button.grid(row=0, column=2, padx=5)
+        self.settings_button = ttk.Button(action_frame, text="Settings", command=lambda: asyncio.create_task(self.open_settings_window())); self.settings_button.grid(row=0, column=3, padx=(5, 0))
 
         progress_frame = ttk.LabelFrame(main_frame, text="Progress & Log", padding="10"); progress_frame.pack(fill=tk.BOTH, expand=True, pady=5); progress_frame.rowconfigure(1, weight=1); progress_frame.columnconfigure(0, weight=1)
         overall_progress_frame = ttk.Frame(progress_frame); overall_progress_frame.grid(row=0, column=0, sticky='ew', pady=(0, 10))
@@ -176,7 +191,9 @@ class YTDlpDownloaderApp:
         tree_scrollbar = ttk.Scrollbar(tree_frame, orient="vertical", command=self.downloads_tree.yview); self.downloads_tree.configure(yscrollcommand=tree_scrollbar.set); tree_scrollbar.pack(side=tk.RIGHT, fill=tk.Y); self.downloads_tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         self.downloads_tree.tag_configure('failed', background='misty rose'); self.downloads_tree.tag_configure('completed', background='pale green'); self.downloads_tree.tag_configure('cancelled', background='light grey')
 
-        self.tree_context_menu = JobContextMenu(self.root, self.downloads_tree, retry_callback=self.retry_failed_download, open_folder_callback=self.open_output_folder)
+        retry_cb = lambda: asyncio.create_task(self.retry_failed_download())
+        open_folder_cb = lambda: asyncio.create_task(self.open_output_folder())
+        self.tree_context_menu = JobContextMenu(self.root, self.downloads_tree, retry_callback=retry_cb, open_folder_callback=open_folder_cb)
         self.downloads_tree.bind("<Button-3>", self.tree_context_menu.show)
         if sys.platform == "darwin": self.downloads_tree.bind("<Button-2>", self.tree_context_menu.show); self.downloads_tree.bind("<Control-Button-1>", self.tree_context_menu.show)
 
@@ -184,28 +201,23 @@ class YTDlpDownloaderApp:
         status_bar_frame = ttk.Frame(self.root, relief=tk.SUNKEN); status_bar_frame.pack(side=tk.BOTTOM, fill=tk.X, padx=2, pady=2)
         self.status_label = ttk.Label(status_bar_frame, text="Ready"); self.status_label.pack(side=tk.LEFT, padx=5)
 
-    def set_status(self, message: str):
-        """Updates the text in the status bar."""
+    async def set_status(self, message: str):
         self.status_label.config(text=message)
 
     def update_options_ui(self, *args):
-        """Shows or hides UI elements based on the selected download type."""
         self.video_options_frame.pack_forget(); self.audio_options_frame.pack_forget()
         if self.download_type_var.get() == "video": self.video_options_frame.pack(side=tk.LEFT, fill=tk.X, expand=True)
         elif self.download_type_var.get() == "audio": self.audio_options_frame.pack(side=tk.LEFT, fill=tk.X, expand=True)
 
-    def initiate_dependency_prompt(self, dep_type: str):
-        """Asks user to download a missing dependency."""
+    async def initiate_dependency_prompt(self, dep_type: str):
         if self.dep_progress_win.is_visible: return
         msg_map = {'yt-dlp': "yt-dlp not found.", 'ffmpeg': "FFmpeg is required for some features but not found."}
         if messagebox.askyesno(f"{dep_type.upper()} Not Found", f"{msg_map.get(dep_type, 'Dependency not found.')}\n\nDownload the latest version?"):
-            self.app_controller.initiate_dependency_download(dep_type)
+            await self.app_controller.initiate_dependency_download(dep_type)
 
-    def queue_downloads(self):
-        """Validates inputs and passes the download request to the controller."""
+    async def queue_downloads(self):
         urls_raw = self.url_text.get(1.0, tk.END).strip()
         if not urls_raw: messagebox.showwarning("Input Error", "Please enter at least one URL."); return
-
         valid_urls = [u for url in urls_raw.splitlines() if (u := url.strip()) and urllib.parse.urlparse(u).scheme]
         if not valid_urls: messagebox.showwarning("Input Error", "No valid URLs provided."); return
 
@@ -218,85 +230,37 @@ class YTDlpDownloaderApp:
         options = {'output_path': output_path, 'filename_template': self.config.filename_template, 'download_type': self.download_type_var.get(), 'video_resolution': self.video_resolution_var.get(), 'audio_format': self.audio_format_var.get(), 'embed_thumbnail': self.embed_thumbnail_var.get()}
 
         self.url_text.delete(1.0, tk.END)
-        self.app_controller.start_downloads(valid_urls, options)
+        await self.app_controller.start_downloads(valid_urls, options)
 
-    def stop_downloads(self):
-        """Requests the controller to stop all downloads."""
+    async def stop_downloads(self):
         if messagebox.askyesno("Confirm Stop", "Stop all current and queued downloads?"):
-            self.app_controller.stop_all_downloads()
+            await self.app_controller.stop_all_downloads()
 
-    def clear_completed_list(self):
-        """Asks controller to clear all finished jobs."""
-        self.app_controller.clear_completed_jobs()
+    async def clear_completed_list(self):
+        await self.app_controller.clear_completed_jobs()
 
-    def process_gui_queue(self):
-        """Processes messages from the controller."""
+    def process_log_queue(self):
+        """Processes log messages from the queue."""
         try:
             while True:
-                msg = self.gui_queue.get_nowait()
-                if isinstance(msg, logging.LogRecord):
-                    self.update_log_display(self.log_formatter.format(msg))
-                    continue
-
-                msg_type, value = msg
-                if msg_type == 'update_progress_view':
-                    self.update_overall_progress(value)
-                elif msg_type == 'reset_progress_view':
-                    self.downloads_tree.delete(*self.downloads_tree.get_children())
-                    self.update_overall_progress({'completed': 0, 'total': 0, 'jobs': []})
-                    self.set_status("Ready")
-                elif msg_type == 'remove_jobs_from_view':
-                    for job_id in value:
-                        if self.downloads_tree.exists(job_id): self.downloads_tree.delete(job_id)
-                elif msg_type == 'update_download_state':
-                    self.update_button_states(value['is_downloading'])
-                elif msg_type == 'set_status':
-                    self.set_status(value)
-                elif msg_type == 'url_processing_done':
-                    self.toggle_url_input_state(True)
-                elif msg_type == 'initiate_dependency_prompt':
-                    self.root.after(100, self.initiate_dependency_prompt, value)
-                elif msg_type == 'show_dependency_progress_window':
-                    self.toggle_ui_state(False)
-                    self.dep_progress_win.show(value)
-                elif msg_type == 'close_dependency_progress_window':
-                    self.dep_progress_win.close(); self.toggle_ui_state(True)
-                elif msg_type == 'dependency_progress':
-                    self.dep_progress_win.update_progress(value)
-                elif msg_type == 'show_message':
-                    handler = getattr(messagebox, f"show{value['type']}", messagebox.showinfo)
-                    handler(value['title'], value['message'])
-                elif msg_type == 'update_dependency_version' and self.settings_win and self.settings_win.winfo_exists():
-                    var = self.yt_dlp_version_var if value['type'] == 'yt-dlp' else self.ffmpeg_status_var
-                    var.set(value['version'])
-                elif msg_type == 'critical_error':
-                    messagebox.showerror("Critical Error", value)
-                    self.is_destroyed = True; self.root.after(1, self.root.destroy)
-                elif msg_type == 'new_version_available':
-                    self._show_update_dialog(value['version'], value['url'])
+                record = self.gui_queue.get_nowait()
+                self.update_log_display(self.log_formatter.format(record))
         except queue.Empty:
-            if not self.is_destroyed: self.root.after(100, self.process_gui_queue)
+            pass
 
-    def update_overall_progress(self, data: Dict[str, Any]):
-        """Updates the progress bar, label, and job list from controller data."""
+    async def update_progress_view(self, data: Dict[str, Any]):
         if self.is_destroyed: return
         completed, total = data.get('completed', 0), data.get('total', 0)
         jobs: List[DownloadJob] = data.get('jobs', [])
 
-        # Update labels and progress bar
         self.overall_progress_label.config(text=f"Overall Progress: {completed} / {total}")
         self.overall_progress_bar.update_progress(jobs)
-        if total > 0 and completed < total: self.set_status(f"Downloading... ({completed}/{total})")
-        elif total > 0 and completed >= total: self.set_status(f"All downloads complete! ({completed}/{total})")
+        if total > 0 and completed < total: await self.set_status(f"Downloading... ({completed}/{total})")
+        elif total > 0 and completed >= total: await self.set_status(f"All downloads complete! ({completed}/{total})")
 
-        # Update Treeview (more efficient than full rebuild)
-        current_tree_ids = set(self.downloads_tree.get_children())
-        job_data_map = {job.job_id: job for job in jobs}
+        current_tree_ids, job_data_map = set(self.downloads_tree.get_children()), {job.job_id: job for job in jobs}
         job_ids = set(job_data_map.keys())
-
-        to_remove = current_tree_ids - job_ids
-        to_add = job_ids - current_tree_ids
-        to_update = current_tree_ids.intersection(job_ids)
+        to_remove, to_add, to_update = current_tree_ids - job_ids, job_ids - current_tree_ids, current_tree_ids.intersection(job_ids)
 
         for job_id in to_remove: self.downloads_tree.delete(job_id)
         for job_id in to_add:
@@ -310,93 +274,97 @@ class YTDlpDownloaderApp:
                    ('failed',) if any(s in job.status.lower() for s in ['failed', 'error']) else ()
             self.downloads_tree.item(job_id, tags=tags)
 
+    async def reset_progress_view(self):
+        self.downloads_tree.delete(*self.downloads_tree.get_children())
+        self.overall_progress_bar.clear()
+        await self.update_progress_view({'completed': 0, 'total': 0, 'jobs': []})
+        await self.set_status("Ready")
 
-    def update_button_states(self, is_downloading: bool):
-        """Enables or disables buttons based on download state."""
+    async def remove_jobs_from_view(self, job_ids: List[str]):
+        for job_id in job_ids:
+            if self.downloads_tree.exists(job_id): self.downloads_tree.delete(job_id)
+
+    async def update_button_states(self, is_downloading: bool):
         state = 'disabled' if is_downloading else 'normal'
         self.settings_button.config(state=state)
         self.stop_button.config(state='normal' if is_downloading else 'disabled')
-        if is_downloading:
-            self.toggle_url_input_state(False)
+        if is_downloading: await self.toggle_url_input_state(False)
 
-    def toggle_ui_state(self, enabled: bool):
-        """Enables or disables major UI components."""
-        state, combo_state = ('normal' if enabled else 'disabled'), ('readonly' if enabled else 'disabled')
-        self.toggle_url_input_state(enabled)
-        for child in self.options_frame.winfo_children():
-            if isinstance(child, (ttk.Radiobutton, ttk.Checkbutton)): child.config(state=state)
-        self.video_resolution_combo.config(state=combo_state); self.audio_format_combo.config(state=combo_state)
-
-    def toggle_url_input_state(self, enabled: bool):
-        """Enables or disables the URL input and download button."""
+    async def toggle_url_input_state(self, enabled: bool):
         state = 'normal' if enabled else 'disabled'
         self.url_text.config(state=state); self.browse_button.config(state=state)
         self.download_button.config(state=state)
 
-    def open_settings_window(self):
-        """Opens the settings window."""
+    async def show_dependency_progress_window(self, title: str):
+        self.dep_progress_win.show(title)
+    
+    async def update_dependency_progress(self, data: Dict[str, Any]):
+        self.dep_progress_win.update_progress(data)
+
+    async def close_dependency_progress_window(self):
+        self.dep_progress_win.close()
+
+    async def show_message(self, data: Dict[str, str]):
+        handler = getattr(messagebox, f"show{data['type']}", messagebox.showinfo)
+        handler(data['title'], data['message'])
+
+    async def update_dependency_version(self, data: Dict[str, str]):
         if self.settings_win and self.settings_win.winfo_exists():
-            self.settings_win.lift()
-            return
-        self.settings_win = SettingsWindow(
-            master=self.root,
-            app_controller=self.app_controller,
-            config=self.config,
-            yt_dlp_var=self.yt_dlp_version_var,
-            ffmpeg_var=self.ffmpeg_status_var
-        )
+            var = self.yt_dlp_version_var if data['type'] == 'yt-dlp' else self.ffmpeg_status_var
+            var.set(data['version'])
 
-    def open_output_folder(self):
-        """Asks controller to open the currently configured output folder."""
-        self.app_controller.open_folder(self.output_path_var.get())
+    async def show_critical_error(self, message: str):
+        messagebox.showerror("Critical Error", message)
+        self.is_destroyed = True
+        self.root.destroy()
 
-    def retry_failed_download(self):
-        """Asks controller to retry all currently selected failed downloads."""
-        items_to_retry_ids = [item for item in self.downloads_tree.selection() if 'failed' in self.downloads_tree.item(item, 'tags')]
-        if not items_to_retry_ids: return
-        self.app_controller.add_jobs_for_retry(items_to_retry_ids)
-
-    def browse_output_path(self):
-        """Opens a dialog to select the output folder."""
-        path = filedialog.askdirectory(initialdir=self.output_path_var.get(), title="Select Output Folder")
-        if path: self.output_path_var.set(path)
-
-    def update_log_display(self, message: str):
-        """Appends a message to the log display text widget."""
-        if self.is_destroyed: return
-        self.log_text.config(state='normal')
-        self.log_text.insert(tk.END, message + '\n')
-        num_lines = int(self.log_text.index('end-1c').split('.')[0])
-        if num_lines > self.MAX_LOG_LINES:
-            self.log_text.delete('1.0', f'{num_lines - self.MAX_LOG_LINES + 1}.0')
-        self.log_text.see(tk.END)
-        self.log_text.config(state='disabled')
-
-    def _show_update_dialog(self, new_version: str, release_url: str):
-        """Displays a dialog informing the user of a new application version."""
+    async def show_update_dialog(self, new_version: str, release_url: str):
         if self.update_dialog and self.update_dialog.winfo_exists(): return
-
         self.update_dialog = tk.Toplevel(self.root); self.update_dialog.title("Update Available"); self.update_dialog.geometry("400x200")
         self.update_dialog.resizable(False, False); self.update_dialog.transient(self.root)
-
         main_frame = ttk.Frame(self.update_dialog, padding="15"); main_frame.pack(fill=tk.BOTH, expand=True)
         ttk.Label(main_frame, text="A new version is available!", font=("TkDefaultFont", 10, "bold")).pack(pady=(0, 10))
         ttk.Label(main_frame, text=f"Current version: {__version__}").pack()
         ttk.Label(main_frame, text=f"New version: {new_version}").pack(pady=(0, 15))
-
         skip_var = tk.BooleanVar()
         ttk.Checkbutton(main_frame, text="Don't remind me about this version again", variable=skip_var).pack(pady=5)
         button_frame = ttk.Frame(main_frame); button_frame.pack(fill=tk.X, pady=10)
 
-        def go_to_download():
-            self.app_controller.open_link(release_url); dismiss_and_save()
         def dismiss_and_save():
             if not self.update_dialog: return
-            if skip_var.get():
-                self.app_controller.skip_update_version(new_version)
+            if skip_var.get(): self.app_controller.skip_update_version(new_version)
             self.update_dialog.destroy(); self.update_dialog = None
+        
+        async def go_to_download_async():
+            await self.app_controller.open_link(release_url)
+            dismiss_and_save()
 
-        download_button = ttk.Button(button_frame, text="Go to Download Page", command=go_to_download); download_button.pack(side=tk.LEFT, expand=True, fill=tk.X, padx=(0, 5))
-        dismiss_button = ttk.Button(button_frame, text="Dismiss", command=dismiss_and_save); dismiss_button.pack(side=tk.RIGHT, expand=True, fill=tk.X, padx=(5, 0))
-
+        ttk.Button(button_frame, text="Go to Download Page", command=lambda: asyncio.create_task(go_to_download_async())).pack(side=tk.LEFT, expand=True, fill=tk.X, padx=(0, 5))
+        ttk.Button(button_frame, text="Dismiss", command=dismiss_and_save).pack(side=tk.RIGHT, expand=True, fill=tk.X, padx=(5, 0))
         self.update_dialog.protocol("WM_DELETE_WINDOW", dismiss_and_save); self.update_dialog.grab_set(); self.root.wait_window(self.update_dialog)
+
+    async def open_settings_window(self):
+        if self.settings_win and self.settings_win.winfo_exists():
+            self.settings_win.lift(); return
+        self.settings_win = SettingsWindow(master=self.root, app_controller=self.app_controller, config=self.config, yt_dlp_var=self.yt_dlp_version_var, ffmpeg_var=self.ffmpeg_status_var)
+
+    async def open_output_folder(self):
+        await self.app_controller.open_folder(self.output_path_var.get())
+
+    async def retry_failed_download(self):
+        items_to_retry_ids = [item for item in self.downloads_tree.selection() if 'failed' in self.downloads_tree.item(item, 'tags')]
+        if not items_to_retry_ids: return
+        await self.app_controller.add_jobs_for_retry(items_to_retry_ids)
+
+    def browse_output_path(self):
+        path = filedialog.askdirectory(initialdir=self.output_path_var.get(), title="Select Output Folder")
+        if path: self.output_path_var.set(path)
+
+    def update_log_display(self, message: str):
+        if self.is_destroyed: return
+        self.log_text.config(state='normal')
+        self.log_text.insert(tk.END, message + '\n')
+        num_lines = int(self.log_text.index('end-1c').split('.')[0])
+        if num_lines > self.MAX_LOG_LINES: self.log_text.delete('1.0', f'{num_lines - self.MAX_LOG_LINES + 1}.0')
+        self.log_text.see(tk.END)
+        self.log_text.config(state='disabled')

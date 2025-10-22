@@ -1,13 +1,12 @@
 """Manages checking for new application versions on GitHub."""
 import logging
-import threading
 import json
-from typing import Callable, Tuple, Any
+from typing import Callable, Tuple, Any, Coroutine
 
-import requests
+import aiohttp
 from packaging.version import parse, InvalidVersion
 
-from .constants import GITHUB_API_URL, REQUEST_HEADERS, REQUEST_TIMEOUTS
+from .constants import GITHUB_API_URL, REQUEST_HEADERS
 from ._version import __version__
 from .config import Settings
 
@@ -15,38 +14,33 @@ from .config import Settings
 class AppUpdater:
     """Checks for new application versions on GitHub."""
 
-    def __init__(self, event_callback: Callable[[Tuple[str, Any]], None], config: Settings):
+    def __init__(self, event_callback: Callable[[Tuple[str, Any]], Coroutine[Any, Any, None]], config: Settings):
         """
         Initializes the AppUpdater.
 
         Args:
-            event_callback: The function to call with manager events.
+            event_callback: The async function to call with manager events.
             config: The application's configuration settings object.
         """
         self.event_callback = event_callback
         self.config = config
         self.logger = logging.getLogger(__name__)
 
-    def check_for_updates(self):
-        """Starts the update check in a background thread."""
-        thread = threading.Thread(target=self._perform_check, daemon=True, name="App-Update-Checker")
-        thread.start()
-
-    def _perform_check(self):
+    async def check_for_updates(self):
         """
-
         Fetches the latest release info from GitHub and compares versions.
 
         Communicates with the GUI via the event_callback if a new version is found.
         Handles network errors, parsing errors, and unexpected API responses gracefully.
         """
         self.logger.info("Checking for application updates...")
-        latest_version_str = ""  # Initialize to prevent potential unbound error
+        latest_version_str = ""
         try:
-            response = requests.get(GITHUB_API_URL, headers=REQUEST_HEADERS, timeout=REQUEST_TIMEOUTS)
-            response.raise_for_status()
+            async with aiohttp.ClientSession(headers=REQUEST_HEADERS) as session:
+                async with session.get(GITHUB_API_URL, timeout=10) as response:
+                    response.raise_for_status()
+                    data = await response.json()
 
-            data = response.json()
             if not isinstance(data, dict):
                 self.logger.warning(f"Unexpected API response type: {type(data)}")
                 return
@@ -58,7 +52,6 @@ class AppUpdater:
                 self.logger.warning("Could not find version tag or URL in API response.")
                 return
 
-            # Strip a leading 'v' if it exists, for cleaner parsing
             if latest_version_str.startswith('v'):
                 latest_version_str = latest_version_str[1:]
 
@@ -73,14 +66,13 @@ class AppUpdater:
 
             if latest_version > current_version:
                 self.logger.info(f"New version available: {latest_version}")
-                self.event_callback(('new_version_available', {
+                await self.event_callback(('new_version_available', {
                     'version': str(latest_version),
                     'url': release_url
                 }))
 
-        except requests.exceptions.RequestException as e:
-            status_code = f" (Status: {e.response.status_code})" if hasattr(e, 'response') and e.response is not None else ""
-            self.logger.warning(f"Failed to check for updates (network error): {e}{status_code}")
+        except aiohttp.ClientError as e:
+            self.logger.warning(f"Failed to check for updates (network error): {e}")
         except (InvalidVersion, KeyError, TypeError, json.JSONDecodeError) as e:
             self.logger.warning(f"Could not parse API response from GitHub: {e}")
             if latest_version_str:

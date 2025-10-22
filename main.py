@@ -9,6 +9,7 @@ import tkinter as tk
 import queue
 import sys
 import logging
+import asyncio
 from types import TracebackType
 from typing import Type
 
@@ -19,22 +20,19 @@ from src.constants import CONFIG_FILE, TEMP_DOWNLOAD_DIR
 from src.controller import AppController
 
 def handle_exception(exc_type: Type[BaseException], exc_value: BaseException, exc_traceback: TracebackType):
-    """
-    Logs unhandled exceptions.
-
-    This function is set as the global exception hook to ensure that any
-    uncaught exceptions are logged before the application terminates.
-
-    Args:
-        exc_type: The type of the exception.
-        exc_value: The exception instance.
-        exc_traceback: The traceback object.
-    """
+    """Logs unhandled exceptions from synchronous code."""
     logger = logging.getLogger()
     if issubclass(exc_type, KeyboardInterrupt):
         sys.__excepthook__(exc_type, exc_value, exc_traceback)
         return
     logger.critical("Unhandled exception:", exc_info=(exc_type, exc_value, exc_traceback))
+
+def handle_async_exception(loop, context):
+    """Logs unhandled exceptions from asyncio tasks."""
+    logger = logging.getLogger()
+    msg = context.get("exception", context["message"])
+    logger.critical(f"Caught exception from asyncio task: {msg}")
+
 
 if __name__ == "__main__":
     """
@@ -44,20 +42,33 @@ if __name__ == "__main__":
     TEMP_DOWNLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
     # 2. Load configuration before setting up logging
-    gui_queue = queue.Queue()
+    gui_queue = queue.Queue() # Kept for the logging QueueHandler
     config_manager = ConfigManager(CONFIG_FILE)
     config = config_manager.load()
 
     # 3. Use the configured log level for file logging
     setup_logging(gui_queue, config.log_level)
 
-    # 4. Set up global exception handler
+    # 4. Set up global exception handlers
     sys.excepthook = handle_exception
 
     # 5. Create the Controller, which holds all business logic
-    controller = AppController(gui_queue, config_manager, config)
+    controller = AppController(config_manager, config)
 
     # 6. Create and run the Tkinter application (the View)
     root = tk.Tk()
     app = YTDlpDownloaderApp(root, gui_queue, controller, config)
-    root.mainloop()
+
+    async def main_with_exception_handler():
+        """Wrapper to set the asyncio exception handler for the running loop."""
+        try:
+            loop = asyncio.get_running_loop()
+            loop.set_exception_handler(handle_async_exception)
+        except RuntimeError:
+            logging.error("Could not get running loop to set exception handler.")
+        await app.main_async_loop()
+
+    try:
+        asyncio.run(main_with_exception_handler())
+    except KeyboardInterrupt:
+        logging.info("Application interrupted by user.")

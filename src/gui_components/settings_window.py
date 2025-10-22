@@ -4,6 +4,8 @@ Defines the Toplevel window for application settings.
 
 import tkinter as tk
 from tkinter import ttk, messagebox
+import asyncio
+import logging
 
 from ..constants import resource_path
 from ..config import Settings
@@ -28,6 +30,7 @@ class SettingsWindow(tk.Toplevel):
         self.app_controller = app_controller
         self.config = config
         self.is_updating_dependency = False
+        self.logger = logging.getLogger(__name__)
 
         self.title("Settings")
         self.geometry("600x480")
@@ -41,13 +44,23 @@ class SettingsWindow(tk.Toplevel):
 
         self._create_widgets()
         self.protocol("WM_DELETE_WINDOW", self.destroy)
-        self.check_dependency_versions()
+        
+        task = asyncio.create_task(self.check_dependency_versions())
+        task.add_done_callback(self._handle_task_exception)
+
+    def _handle_task_exception(self, task: asyncio.Task) -> None:
+        """Callback to log exceptions from background tasks."""
+        try:
+            task.result()
+        except asyncio.CancelledError:
+            pass
+        except Exception:
+            self.logger.exception(f"Exception in settings window task {task.get_name()}:")
 
     def _create_widgets(self):
         """Creates and lays out all widgets for the settings window."""
         settings_frame = ttk.Frame(self, padding="10"); settings_frame.pack(fill=tk.BOTH, expand=True)
 
-        # --- General Settings ---
         self.concurrent_var = tk.IntVar(value=self.config.max_concurrent_downloads)
         self.temp_filename_template = tk.StringVar(value=self.config.filename_template)
         ttk.Label(settings_frame, text="Max Concurrent Downloads:").grid(row=0, column=0, padx=5, pady=10, sticky=tk.W)
@@ -67,25 +80,23 @@ class SettingsWindow(tk.Toplevel):
         log_level_help = "Sets verbosity of latest.log. Requires restart to take effect."
         ttk.Label(settings_frame, text=log_level_help, font=("TkDefaultFont", 8, "italic")).grid(row=5, column=1, sticky=tk.W, padx=5)
 
-        # --- Dependencies Frame ---
         update_frame = ttk.LabelFrame(settings_frame, text="Dependencies", padding=10); update_frame.grid(row=6, column=0, columnspan=2, sticky=tk.EW, pady=15); update_frame.columnconfigure(1, weight=1)
         ttk.Label(update_frame, text="yt-dlp:").grid(row=0, column=0, sticky=tk.W, padx=5); ttk.Label(update_frame, textvariable=self.yt_dlp_version_var).grid(row=0, column=1, sticky=tk.W, padx=5)
         ttk.Label(update_frame, text="FFmpeg:").grid(row=1, column=0, sticky=tk.W, padx=5); ttk.Label(update_frame, textvariable=self.ffmpeg_status_var, wraplength=400).grid(row=1, column=1, sticky=tk.W, padx=5)
         update_buttons_frame = ttk.Frame(update_frame); update_buttons_frame.grid(row=2, column=0, columnspan=2, pady=(10,0))
-        self.yt_dlp_update_button = ttk.Button(update_buttons_frame, text="Update yt-dlp", command=self.start_yt_dlp_update); self.yt_dlp_update_button.pack(side=tk.LEFT, padx=5)
-        self.ffmpeg_update_button = ttk.Button(update_buttons_frame, text="Download/Update FFmpeg", command=self.start_ffmpeg_update); self.ffmpeg_update_button.pack(side=tk.LEFT, padx=5)
+        self.yt_dlp_update_button = ttk.Button(update_buttons_frame, text="Update yt-dlp", command=lambda: asyncio.create_task(self.start_yt_dlp_update())); self.yt_dlp_update_button.pack(side=tk.LEFT, padx=5)
+        self.ffmpeg_update_button = ttk.Button(update_buttons_frame, text="Download/Update FFmpeg", command=lambda: asyncio.create_task(self.start_ffmpeg_update())); self.ffmpeg_update_button.pack(side=tk.LEFT, padx=5)
 
-        # --- Save/Cancel Buttons ---
         buttons_frame = ttk.Frame(settings_frame)
         buttons_frame.grid(row=7, column=0, columnspan=2, pady=15, sticky=tk.E)
         ttk.Button(buttons_frame, text="Save", command=self._save_and_close).pack(side=tk.LEFT, padx=5)
         ttk.Button(buttons_frame, text="Cancel", command=self.destroy).pack(side=tk.LEFT)
 
-    def check_dependency_versions(self):
+    async def check_dependency_versions(self):
         """Asks the controller to fetch dependency versions."""
         self.yt_dlp_version_var.set("Checking...")
         self.ffmpeg_status_var.set("Checking...")
-        self.app_controller.get_dependency_versions()
+        await self.app_controller.get_dependency_versions()
 
     def _save_and_close(self):
         """Validates settings, saves them, and closes the window."""
@@ -113,25 +124,24 @@ class SettingsWindow(tk.Toplevel):
         for btn in [self.yt_dlp_update_button, self.ffmpeg_update_button]:
             if btn and btn.winfo_exists(): btn.config(state=state)
 
-    def start_yt_dlp_update(self):
+    async def start_yt_dlp_update(self):
         """Starts the yt-dlp update process."""
-        self._start_dep_update("yt-dlp", "Download latest yt-dlp?")
+        await self._start_dep_update("yt-dlp", "Download latest yt-dlp?")
 
-    def start_ffmpeg_update(self):
+    async def start_ffmpeg_update(self):
         """Starts the FFmpeg download/update process."""
-        self._start_dep_update("ffmpeg", "Download latest FFmpeg? (Large file)")
+        await self._start_dep_update("ffmpeg", "Download latest FFmpeg? (Large file)")
 
-    def _start_dep_update(self, dep_type: str, message: str):
+    async def _start_dep_update(self, dep_type: str, message: str):
         """Generic method to start a dependency update."""
         if self.is_updating_dependency: return
         if messagebox.askyesno(f"Confirm Update", message, parent=self):
             self.is_updating_dependency = True
             self._toggle_update_buttons(False)
-            self.app_controller.initiate_dependency_download(dep_type)
-
-    def on_dependency_update_complete(self):
-        """Callback for when a dependency update finishes."""
-        if self.winfo_exists():
-            self.is_updating_dependency = False
-            self._toggle_update_buttons(True)
-            self.check_dependency_versions()
+            
+            await self.app_controller.initiate_dependency_download(dep_type)
+            
+            if self.winfo_exists():
+                self.is_updating_dependency = False
+                self._toggle_update_buttons(True)
+                await self.check_dependency_versions()

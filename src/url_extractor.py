@@ -2,10 +2,9 @@
 Provides methods to extract information from URLs using yt-dlp.
 """
 
-import subprocess
+import asyncio
 import sys
 import logging
-import threading
 from pathlib import Path
 from typing import List, Tuple
 
@@ -19,16 +18,14 @@ class URLInfoExtractor:
 
     This class uses fast, non-JSON-based commands for performance.
     """
-    def __init__(self, yt_dlp_path: Path, stop_event: threading.Event):
+    def __init__(self, yt_dlp_path: Path):
         """
         Initializes the URLInfoExtractor.
 
         Args:
             yt_dlp_path: The path to the yt-dlp executable.
-            stop_event: A threading.Event to signal cancellation.
         """
         self.yt_dlp_path = yt_dlp_path
-        self.stop_event = stop_event
         self.logger = logging.getLogger(__name__)
 
     def _parse_yt_dlp_error(self, stderr: str) -> str:
@@ -51,7 +48,7 @@ class URLInfoExtractor:
 
         return stderr.strip().splitlines()[-1]
 
-    def _run_command(self, command: List[str], timeout: int) -> Tuple[str, str]:
+    async def _run_command(self, command: List[str], timeout: int) -> Tuple[str, str]:
         """
         A robust wrapper for running a yt-dlp command.
 
@@ -64,28 +61,38 @@ class URLInfoExtractor:
 
         Raises:
             URLExtractionError: On any failure (e.g., timeout, non-zero exit code).
+            DownloadCancelledError: If the task is cancelled.
         """
-        kwargs = {'text': True, 'encoding': 'utf-8', 'errors': 'replace'}
+        kwargs = {}
         if sys.platform == 'win32':
             kwargs['creationflags'] = SUBPROCESS_CREATION_FLAGS
 
         process = None
         try:
-            process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, **kwargs)
-            stdout, stderr = process.communicate(timeout=timeout)
+            process = await asyncio.create_subprocess_exec(
+                *command,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                **kwargs
+            )
+            stdout_bytes, stderr_bytes = await asyncio.wait_for(process.communicate(), timeout=timeout)
+            stdout = stdout_bytes.decode('utf-8', 'replace')
+            stderr = stderr_bytes.decode('utf-8', 'replace')
+
         except FileNotFoundError:
             self.logger.error(f"yt-dlp executable not found at: {self.yt_dlp_path}")
             raise URLExtractionError("yt-dlp executable not found.")
-        except subprocess.TimeoutExpired:
-            if process:
-                process.kill()
+        except asyncio.TimeoutError:
+            if process: process.kill()
             self.logger.error(f"yt-dlp command timed out: {' '.join(command)}")
             raise URLExtractionError("URL processing command timed out.")
         except OSError as e:
             self.logger.error(f"OS error running yt-dlp: {e}")
             raise URLExtractionError(f"OS error: {e}")
+        except asyncio.CancelledError:
+             if process: process.kill()
+             raise DownloadCancelledError("URL processing cancelled.")
 
-        # If we get here, process must have been created and completed.
         if process.returncode != 0:
             error_msg = self._parse_yt_dlp_error(stderr)
             self.logger.error(f"yt-dlp command failed for '{command[-1]}'. Stderr: {stderr.strip()}")
@@ -93,7 +100,7 @@ class URLInfoExtractor:
 
         return stdout, stderr
 
-    def get_video_count(self, url: str) -> int:
+    async def get_video_count(self, url: str) -> int:
         """
         Efficiently counts the number of videos in a URL (single or playlist).
 
@@ -104,20 +111,15 @@ class URLInfoExtractor:
             The number of videos found in the URL.
 
         Raises:
-            DownloadCancelledError: If the stop_event is set.
+            DownloadCancelledError: If the task is cancelled.
             URLExtractionError: If the yt-dlp command fails.
         """
-        if self.stop_event.is_set():
-            raise DownloadCancelledError("URL processing cancelled.")
-
         command = [str(self.yt_dlp_path), '--flat-playlist', '--print', 'id', '--no-warnings', url]
-
-        stdout, _ = self._run_command(command, timeout=60)
-
+        stdout, _ = await self._run_command(command, timeout=60)
         count = len([line for line in stdout.splitlines() if line.strip()])
         return count
 
-    def get_single_video_title(self, url: str) -> str:
+    async def get_single_video_title(self, url: str) -> str:
         """
         Quickly retrieves the title for a single video URL.
 
@@ -128,14 +130,10 @@ class URLInfoExtractor:
             The title of the video.
 
         Raises:
-            DownloadCancelledError: If the stop_event is set.
+            DownloadCancelledError: If the task is cancelled.
             URLExtractionError: If the yt-dlp command fails.
         """
-        if self.stop_event.is_set():
-            raise DownloadCancelledError("URL processing cancelled.")
-
         command = [str(self.yt_dlp_path), '--get-title', '--no-warnings', url]
-        stdout, _ = self._run_command(command, timeout=30)
-
+        stdout, _ = await self._run_command(command, timeout=30)
         title = stdout.strip()
         return title if title else "Title not found"
