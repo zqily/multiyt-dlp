@@ -76,7 +76,7 @@ class YTDlpDownloaderApp:
     """The main application class, handling the Tkinter GUI and event loop."""
     MAX_LOG_LINES = 2000
 
-    def __init__(self, root: tk.Tk, gui_queue: queue.Queue, app_controller: AppController, config: Settings):
+    def __init__(self, root: tk.Tk, gui_queue: queue.Queue, app_controller: AppController, config: Settings, loop: asyncio.AbstractEventLoop):
         """
         Initializes the main application GUI.
 
@@ -85,6 +85,7 @@ class YTDlpDownloaderApp:
             gui_queue: The queue for cross-thread GUI communication (for logging).
             app_controller: The central application controller.
             config: The loaded application settings.
+            loop: The asyncio event loop.
         """
         self.root = root
         self.root.title(f"Multiyt-dlp v{__version__}"); self.root.geometry("850x780")
@@ -96,6 +97,7 @@ class YTDlpDownloaderApp:
         self.log_formatter = logging.Formatter('%(asctime)s - %(levelname)-8s - %(name)-25s - %(message)s')
         self.app_controller = app_controller
         self.config = config
+        self.loop = loop
         self.app_controller.set_gui(self)
 
         self.settings_win: Optional[SettingsWindow] = None
@@ -109,21 +111,27 @@ class YTDlpDownloaderApp:
         self.dep_progress_win = DependencyProgressWindow(self.root, self.app_controller.cancel_dependency_download)
 
         self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
-
-    async def main_async_loop(self):
-        """The main async loop for the application."""
-        # Set initial status now that the loop is running.
-        await self.set_status("Ready")
-        # Run startup checks once, right after the loop has started.
-        await self.app_controller.run_startup_checks()
-        while not self.is_destroyed:
-            self.process_log_queue()
-            self.root.update()
-            await asyncio.sleep(0.01)
+        # Run startup checks once the loop is running
+        self.loop.create_task(self.app_controller.run_startup_checks())
+        # Set initial status and start the async loop driver
+        self.loop.create_task(self.set_status("Ready"))
+        self.root.after(50, self._run_async_loop)
 
     def on_closing(self):
         """Synchronous wrapper for the async closing logic."""
-        asyncio.create_task(self.handle_closing_async())
+        self.loop.create_task(self.handle_closing_async())
+
+    def _run_async_loop(self):
+        """
+        Drives the asyncio event loop and reschedules itself.
+        This function is called periodically by the Tkinter main loop.
+        """
+        if self.is_destroyed:
+            return
+        self.loop.call_soon(self.loop.stop)
+        self.loop.run_forever()
+        self.process_log_queue()
+        self.root.after(50, self._run_async_loop)
 
     async def handle_closing_async(self):
         """Handles the application window closing event."""
@@ -172,10 +180,10 @@ class YTDlpDownloaderApp:
         self.update_options_ui()
 
         action_frame = ttk.Frame(main_frame); action_frame.pack(fill=tk.X, pady=10); action_frame.columnconfigure(0, weight=1)
-        self.download_button = ttk.Button(action_frame, text="Add URLs to Queue & Download", command=lambda: asyncio.create_task(self.queue_downloads())); self.download_button.grid(row=0, column=0, sticky=tk.EW)
-        self.stop_button = ttk.Button(action_frame, text="Stop All", command=lambda: asyncio.create_task(self.stop_downloads()), state='disabled'); self.stop_button.grid(row=0, column=1, padx=5)
-        self.clear_button = ttk.Button(action_frame, text="Clear Completed", command=lambda: asyncio.create_task(self.clear_completed_list())); self.clear_button.grid(row=0, column=2, padx=5)
-        self.settings_button = ttk.Button(action_frame, text="Settings", command=lambda: asyncio.create_task(self.open_settings_window())); self.settings_button.grid(row=0, column=3, padx=(5, 0))
+        self.download_button = ttk.Button(action_frame, text="Add URLs to Queue & Download", command=lambda: self.loop.create_task(self.queue_downloads())); self.download_button.grid(row=0, column=0, sticky=tk.EW)
+        self.stop_button = ttk.Button(action_frame, text="Stop All", command=lambda: self.loop.create_task(self.stop_downloads()), state='disabled'); self.stop_button.grid(row=0, column=1, padx=5)
+        self.clear_button = ttk.Button(action_frame, text="Clear Completed", command=lambda: self.loop.create_task(self.clear_completed_list())); self.clear_button.grid(row=0, column=2, padx=5)
+        self.settings_button = ttk.Button(action_frame, text="Settings", command=lambda: self.loop.create_task(self.open_settings_window())); self.settings_button.grid(row=0, column=3, padx=(5, 0))
 
         progress_frame = ttk.LabelFrame(main_frame, text="Progress & Log", padding="10"); progress_frame.pack(fill=tk.BOTH, expand=True, pady=5); progress_frame.rowconfigure(1, weight=1); progress_frame.columnconfigure(0, weight=1)
         overall_progress_frame = ttk.Frame(progress_frame); overall_progress_frame.grid(row=0, column=0, sticky='ew', pady=(0, 10))
@@ -191,8 +199,8 @@ class YTDlpDownloaderApp:
         tree_scrollbar = ttk.Scrollbar(tree_frame, orient="vertical", command=self.downloads_tree.yview); self.downloads_tree.configure(yscrollcommand=tree_scrollbar.set); tree_scrollbar.pack(side=tk.RIGHT, fill=tk.Y); self.downloads_tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         self.downloads_tree.tag_configure('failed', background='misty rose'); self.downloads_tree.tag_configure('completed', background='pale green'); self.downloads_tree.tag_configure('cancelled', background='light grey')
 
-        retry_cb = lambda: asyncio.create_task(self.retry_failed_download())
-        open_folder_cb = lambda: asyncio.create_task(self.open_output_folder())
+        retry_cb = lambda: self.loop.create_task(self.retry_failed_download())
+        open_folder_cb = lambda: self.loop.create_task(self.open_output_folder())
         self.tree_context_menu = JobContextMenu(self.root, self.downloads_tree, retry_callback=retry_cb, open_folder_callback=open_folder_cb)
         self.downloads_tree.bind("<Button-3>", self.tree_context_menu.show)
         if sys.platform == "darwin": self.downloads_tree.bind("<Button-2>", self.tree_context_menu.show); self.downloads_tree.bind("<Control-Button-1>", self.tree_context_menu.show)
@@ -339,7 +347,7 @@ class YTDlpDownloaderApp:
             await self.app_controller.open_link(release_url)
             dismiss_and_save()
 
-        ttk.Button(button_frame, text="Go to Download Page", command=lambda: asyncio.create_task(go_to_download_async())).pack(side=tk.LEFT, expand=True, fill=tk.X, padx=(0, 5))
+        ttk.Button(button_frame, text="Go to Download Page", command=lambda: self.loop.create_task(go_to_download_async())).pack(side=tk.LEFT, expand=True, fill=tk.X, padx=(0, 5))
         ttk.Button(button_frame, text="Dismiss", command=dismiss_and_save).pack(side=tk.RIGHT, expand=True, fill=tk.X, padx=(5, 0))
         self.update_dialog.protocol("WM_DELETE_WINDOW", dismiss_and_save); self.update_dialog.grab_set(); self.root.wait_window(self.update_dialog)
 

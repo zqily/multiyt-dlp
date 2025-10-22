@@ -31,7 +31,7 @@ def handle_async_exception(loop, context):
     """Logs unhandled exceptions from asyncio tasks."""
     logger = logging.getLogger()
     msg = context.get("exception", context["message"])
-    logger.critical(f"Caught exception from asyncio task: {msg}")
+    logger.critical(f"Caught exception from asyncio task: {msg}", exc_info=context.get('exception'))
 
 
 if __name__ == "__main__":
@@ -51,24 +51,21 @@ if __name__ == "__main__":
 
     # 4. Set up global exception handlers
     sys.excepthook = handle_exception
+    
+    # Get the asyncio event loop and set its exception handler
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    loop.set_exception_handler(handle_async_exception)
 
     # 5. Create the Controller, which holds all business logic
     controller = AppController(config_manager, config)
 
-    # 6. Create and run the Tkinter application (the View)
+    # 6. Create the Tkinter application (the View)
     root = tk.Tk()
-    app = YTDlpDownloaderApp(root, gui_queue, controller, config)
+    app = YTDlpDownloaderApp(root, gui_queue, controller, config, loop)
 
-    async def main_with_exception_handler():
-        """Wrapper to set the asyncio exception handler for the running loop."""
-        try:
-            loop = asyncio.get_running_loop()
-            loop.set_exception_handler(handle_async_exception)
-        except RuntimeError:
-            logging.error("Could not get running loop to set exception handler.")
-        await app.main_async_loop()
-
+    # 7. Start the Tkinter main loop. The GUI class now drives the asyncio loop.
     try:
-        asyncio.run(main_with_exception_handler())
+        root.mainloop()
     except KeyboardInterrupt:
         logging.info("Application interrupted by user.")

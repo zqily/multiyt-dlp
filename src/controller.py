@@ -283,7 +283,7 @@ class AppController:
     async def get_dependency_versions(self):
         """Asynchronously fetches dependency versions and sends them to the GUI."""
         async def check_and_report(dep_type: str, path: Optional[Path]):
-            version = await asyncio.to_thread(self.dep_manager.get_version, path)
+            version = await self.dep_manager.get_version(path)
             await self.gui.update_dependency_version({'type': dep_type, 'version': version})
 
         await asyncio.gather(

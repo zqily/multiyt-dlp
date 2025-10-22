@@ -64,22 +64,37 @@ class DependencyManager:
         path_in_system = shutil.which(name)
         return Path(path_in_system) if path_in_system else None
 
-    def get_version(self, executable_path: Optional[Path]) -> str:
-        """Returns the version of an executable by running it with '--version'."""
-        if not executable_path or not executable_path.exists(): return "Not found"
+    async def get_version(self, executable_path: Optional[Path]) -> str:
+        """Asynchronously returns the version of an executable by running it with '--version'."""
+        if not executable_path or not executable_path.exists():
+            return "Not found"
         try:
             command: List[str] = [str(executable_path)]
-            if 'ffmpeg' in executable_path.name.lower(): command.append('-version')
-            else: command.append('--version')
+            if 'ffmpeg' in executable_path.name.lower():
+                command.append('-version')
+            else:
+                command.append('--version')
 
-            kwargs = {'text': True, 'encoding': 'utf-8', 'errors': 'replace', 'stderr': subprocess.STDOUT}
-            if sys.platform == 'win32': kwargs['creationflags'] = SUBPROCESS_CREATION_FLAGS
-            result = subprocess.check_output(command, timeout=15, **kwargs)
-            return result.strip().split('\n')[0]
-        except (FileNotFoundError, PermissionError): return "Not found or no permission"
-        except subprocess.TimeoutExpired: return "Version check timed out"
-        except (subprocess.CalledProcessError, OSError): return "Cannot execute"
-        except Exception: return "Error checking version"
+            kwargs = {'stdout': asyncio.subprocess.PIPE, 'stderr': asyncio.subprocess.PIPE}
+            if sys.platform == 'win32':
+                kwargs['creationflags'] = SUBPROCESS_CREATION_FLAGS
+
+            process = await asyncio.create_subprocess_exec(*command, **kwargs)
+            stdout_bytes, _ = await asyncio.wait_for(process.communicate(), timeout=15)
+            
+            if process.returncode != 0:
+                return "Cannot execute"
+                
+            return stdout_bytes.decode('utf-8', 'replace').strip().split('\n')[0]
+        except FileNotFoundError:
+            return "Not found or no permission"
+        except asyncio.TimeoutError:
+            return "Version check timed out"
+        except OSError:
+            return "Cannot execute"
+        except Exception:
+            self.logger.exception(f"Error checking version for {executable_path}")
+            return "Error checking version"
 
     async def _download_file_with_progress(self, session: aiohttp.ClientSession, url: str, save_path: Path, dep_type: str):
         """Downloads a file, showing progress and handling chunked downloading."""
