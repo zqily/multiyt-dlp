@@ -26,6 +26,7 @@ class Settings(BaseModel):
     video_resolution: str = '1080'
     audio_format: str = 'mp3'
     embed_thumbnail: bool = True
+    embed_metadata: bool = True
     filename_template: str = '%(title).100s [%(id)s].%(ext)s'
     max_concurrent_downloads: int = Field(default=4, ge=1, le=20)
     last_output_path: Path = Field(default_factory=Path.home)

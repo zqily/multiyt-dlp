@@ -1,0 +1,8 @@
+*.webp
+*.png
+*.ico
+Multiyt-dlp.spec
+README.md
+requirements.txt
+LICENSE
+assets/

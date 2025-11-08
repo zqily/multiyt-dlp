@@ -237,6 +237,7 @@ class DownloadManager:
                 command.extend(['--audio-format', audio_format])
                 if audio_format == 'mp3': command.extend(['--audio-quality', '192K'])
         if job.options['embed_thumbnail']: command.append('--embed-thumbnail')
+        if job.options.get('embed_metadata', True): command.append('--embed-metadata')
         if job.playlist_index is not None: command.extend(['--playlist-items', str(job.playlist_index)])
         command.append(job.original_url)
         return command
@@ -247,14 +248,19 @@ class DownloadManager:
         try:
             command = self._build_yt_dlp_command(job)
             
-            kwargs = {'stdout': asyncio.subprocess.PIPE, 'stderr': asyncio.subprocess.PIPE}
+            kwargs: Dict[str, Any] = {}
             if sys.platform == 'win32':
                 kwargs['creationflags'] = SUBPROCESS_CREATION_FLAGS | subprocess.CREATE_NEW_PROCESS_GROUP
             else:
                 kwargs['preexec_fn'] = os.setsid
 
             async with self.active_processes_lock:
-                process = await asyncio.create_subprocess_exec(*command, **kwargs)
+                process = await asyncio.create_subprocess_exec(
+                    *command,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                    **kwargs
+                )
                 self.active_processes[job.job_id] = process
 
             assert process.stdout is not None

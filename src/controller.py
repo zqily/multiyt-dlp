@@ -236,6 +236,7 @@ class AppController:
         self.config.video_resolution = ui_settings.get('video_resolution', self.config.video_resolution)
         self.config.audio_format = ui_settings.get('audio_format', self.config.audio_format)
         self.config.embed_thumbnail = ui_settings.get('embed_thumbnail', self.config.embed_thumbnail)
+        self.config.embed_metadata = ui_settings.get('embed_metadata', self.config.embed_metadata)
         self.config.last_output_path = ui_settings.get('last_output_path', self.config.last_output_path)
 
         self.config_manager.save(self.config)

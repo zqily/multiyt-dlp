@@ -150,6 +150,7 @@ class YTDlpDownloaderApp:
             'video_resolution': self.video_resolution_var.get(),
             'audio_format': self.audio_format_var.get(),
             'embed_thumbnail': self.embed_thumbnail_var.get(),
+            'embed_metadata': self.embed_metadata_var.get(),
             'last_output_path': Path(self.output_path_var.get()) if self.output_path_var.get() else self.config.last_output_path
         }
         await self.app_controller.on_app_closing(ui_settings)
@@ -176,6 +177,10 @@ class YTDlpDownloaderApp:
         self.embed_thumbnail_var = tk.BooleanVar(value=self.config.embed_thumbnail)
         self.thumbnail_check = ttk.Checkbutton(self.options_frame, text="Embed Thumbnail", variable=self.embed_thumbnail_var)
         self.thumbnail_check.pack(side=tk.LEFT, padx=10)
+
+        self.embed_metadata_var = tk.BooleanVar(value=self.config.embed_metadata)
+        self.metadata_check = ttk.Checkbutton(self.options_frame, text="Embed Metadata", variable=self.embed_metadata_var)
+        self.metadata_check.pack(side=tk.LEFT, padx=10)
 
         self.video_options_frame = ttk.Frame(self.dynamic_options_frame)
         ttk.Label(self.video_options_frame, text="Resolution:").pack(side=tk.LEFT, padx=(0, 5)); self.video_resolution_var = tk.StringVar(value=self.config.video_resolution)
@@ -206,8 +211,14 @@ class YTDlpDownloaderApp:
         tree_scrollbar = ttk.Scrollbar(tree_frame, orient="vertical", command=self.downloads_tree.yview); self.downloads_tree.configure(yscrollcommand=tree_scrollbar.set); tree_scrollbar.pack(side=tk.RIGHT, fill=tk.Y); self.downloads_tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         self.downloads_tree.tag_configure('failed', background='misty rose'); self.downloads_tree.tag_configure('completed', background='pale green'); self.downloads_tree.tag_configure('cancelled', background='light grey')
 
-        retry_cb = lambda: self.loop.create_task(self.retry_failed_download())
-        open_folder_cb = lambda: self.loop.create_task(self.open_output_folder())
+        def retry_cb():
+            """Schedules the retry action in the asyncio loop."""
+            self.loop.create_task(self.retry_failed_download())
+
+        def open_folder_cb():
+            """Schedules the open folder action in the asyncio loop."""
+            self.loop.create_task(self.open_output_folder())
+
         self.tree_context_menu = JobContextMenu(self.root, self.downloads_tree, retry_callback=retry_cb, open_folder_callback=open_folder_cb)
         self.downloads_tree.bind("<Button-3>", self.tree_context_menu.show)
         if sys.platform == "darwin": self.downloads_tree.bind("<Button-2>", self.tree_context_menu.show); self.downloads_tree.bind("<Control-Button-1>", self.tree_context_menu.show)
@@ -260,7 +271,7 @@ class YTDlpDownloaderApp:
                 await asyncio.to_thread(messagebox.showerror, "Error", f"Failed to create directory: {e}")
                 return
 
-        options = {'output_path': output_path, 'filename_template': self.config.filename_template, 'download_type': self.download_type_var.get(), 'video_resolution': self.video_resolution_var.get(), 'audio_format': self.audio_format_var.get(), 'embed_thumbnail': self.embed_thumbnail_var.get()}
+        options = {'output_path': output_path, 'filename_template': self.config.filename_template, 'download_type': self.download_type_var.get(), 'video_resolution': self.video_resolution_var.get(), 'audio_format': self.audio_format_var.get(), 'embed_thumbnail': self.embed_thumbnail_var.get(), 'embed_metadata': self.embed_metadata_var.get()}
 
         self.url_text.delete(1.0, tk.END)
         await self.app_controller.start_downloads(valid_urls, options)
