@@ -238,6 +238,7 @@ class DownloadManager:
                 if audio_format == 'mp3': command.extend(['--audio-quality', '192K'])
         if job.options['embed_thumbnail']: command.append('--embed-thumbnail')
         if job.options.get('embed_metadata', True): command.append('--embed-metadata')
+        if not job.options.get('embed_metadata', True): command.append('--no-embed-metadata')
         if job.playlist_index is not None: command.extend(['--playlist-items', str(job.playlist_index)])
         command.append(job.original_url)
         return command
