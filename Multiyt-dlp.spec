@@ -18,8 +18,7 @@ a = Analysis(
     pathex=[],    # No longer needed if running from the project root where main.py resides.
     binaries=[],   # No external binaries are bundled; yt-dlp/ffmpeg are downloaded at runtime.
     datas=[
-        ('src/resources/icon.ico', 'resources')  # Bundles 'icon.ico' into a 'resources' folder inside the app.
-                                                 # Requires updating resource_path() call to 'resources/icon.ico'.
+        ('icon.ico', '.')  # Bundles 'icon.ico' into a 'resources' folder inside the app.
     ],
     hiddenimports=[
         # PRECAUTION: The 'packaging' library is used for version checks and is
@@ -84,6 +83,5 @@ exe = EXE(
     entitlements_file=None,
 
     # This sets the application icon for the .exe file itself in the file explorer.
-    # Assumes icon.ico is in the same directory as the spec file.
-    icon='src/resources/icon.ico',
+    icon='icon.ico',
 )
