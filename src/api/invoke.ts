@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/tauri";
+import { open } from "@tauri-apps/api/dialog";
 
 export async function checkYtDlpPath(): Promise<boolean> {
   try {
@@ -19,10 +20,22 @@ export async function openExternalLink(url: string): Promise<void> {
   return await invoke("open_external_link", { url });
 }
 
-export async function startDownload(url: string): Promise<string> {
-  return await invoke("start_download", { url });
+export async function startDownload(url: string, downloadPath?: string): Promise<string> {
+  return await invoke("start_download", { url, downloadPath });
 }
 
 export async function cancelDownload(jobId: string): Promise<void> {
   return await invoke("cancel_download", { jobId });
+}
+
+export async function selectDirectory(): Promise<string | null> {
+    const selected = await open({
+        directory: true,
+        multiple: false,
+    });
+    
+    if (Array.isArray(selected)) {
+        return selected[0];
+    }
+    return selected;
 }

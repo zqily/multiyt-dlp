@@ -17,6 +17,8 @@ export interface DownloadProgressPayload {
   percentage: number;
   speed: string;
   eta: string;
+  filename?: string; // The clean title of the video
+  phase?: string;    // e.g., "Downloading Video", "Downloading Audio", "Merging"
 }
 
 export interface DownloadCompletePayload {
@@ -42,4 +44,6 @@ export interface Download {
   eta?: string;
   outputPath?: string;
   error?: string;
+  filename?: string;
+  phase?: string;
 }

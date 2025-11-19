@@ -19,6 +19,7 @@ use nix::{
 #[tauri::command]
 pub async fn start_download(
     url: String,
+    download_path: Option<String>,
     app_handle: AppHandle,
     manager: State<'_, Arc<Mutex<JobManager>>>,
 ) -> Result<Uuid, AppError> {
@@ -36,7 +37,7 @@ pub async fn start_download(
     // Spawn the download process in a separate async task
     let manager_clone = manager.inner().clone();
     tokio::spawn(async move {
-        run_download_process(job_id, url, app_handle, manager_clone).await;
+        run_download_process(job_id, url, download_path, app_handle, manager_clone).await;
     });
 
     Ok(job_id)

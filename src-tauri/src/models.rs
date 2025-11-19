@@ -38,6 +38,8 @@ pub struct DownloadProgressPayload {
     pub percentage: f32,
     pub speed: String,
     pub eta: String,
+    pub filename: Option<String>,
+    pub phase: Option<String>,
 }
 
 #[derive(Clone, serde::Serialize)]

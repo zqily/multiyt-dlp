@@ -24,6 +24,8 @@ export function useDownloadManager() {
         progress: event.payload.percentage,
         speed: event.payload.speed,
         eta: event.payload.eta,
+        filename: event.payload.filename,
+        phase: event.payload.phase,
       });
     });
 
@@ -32,6 +34,7 @@ export function useDownloadManager() {
         status: 'completed',
         progress: 100,
         outputPath: event.payload.outputPath,
+        phase: 'Done',
       });
     });
 
@@ -49,9 +52,9 @@ export function useDownloadManager() {
     };
   }, []);
 
-  const startDownload = useCallback(async (url: string) => {
+  const startDownload = useCallback(async (url: string, downloadPath?: string) => {
     try {
-      const jobId = await apiStartDownload(url);
+      const jobId = await apiStartDownload(url, downloadPath);
       setDownloads((prev) => {
         const newMap = new Map(prev);
         newMap.set(jobId, {
@@ -64,7 +67,6 @@ export function useDownloadManager() {
       });
     } catch (error) {
       console.error('Failed to start download:', error);
-      // Here you might want to show a toast notification
     }
   }, []);
 

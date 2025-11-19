@@ -16,6 +16,9 @@
       "shell": {
         "open": true
       },
+      "dialog": {
+        "open": true
+      },
       "process": {
         "all": false,
         "exit": true,
