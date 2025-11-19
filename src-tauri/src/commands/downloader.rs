@@ -7,19 +7,14 @@ use crate::core::{
     manager::{JobManager, JobStatus},
     process::run_download_process,
 };
-use crate::models::Job;
-
-#[cfg(not(windows))]
-use nix::{
-    sys::signal::{self, Signal},
-    unistd::Pid,
-};
+use crate::models::{Job, DownloadFormatPreset}; // Import DownloadFormatPreset
 
 // Command to start a download
 #[tauri::command]
 pub async fn start_download(
     url: String,
     download_path: Option<String>,
+    format_preset: DownloadFormatPreset, // New argument
     app_handle: AppHandle,
     manager: State<'_, Arc<Mutex<JobManager>>>,
 ) -> Result<Uuid, AppError> {
@@ -37,7 +32,14 @@ pub async fn start_download(
     // Spawn the download process in a separate async task
     let manager_clone = manager.inner().clone();
     tokio::spawn(async move {
-        run_download_process(job_id, url, download_path, app_handle, manager_clone).await;
+        run_download_process(
+            job_id, 
+            url, 
+            download_path, 
+            format_preset, // Pass the new argument
+            app_handle, 
+            manager_clone
+        ).await;
     });
 
     Ok(job_id)

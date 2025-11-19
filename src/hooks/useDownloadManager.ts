@@ -1,6 +1,8 @@
+// START OF FILE src_hooks_useDownloadManager.ts.txt
+
 import { useState, useEffect, useCallback } from 'react';
 import { listen } from '@tauri-apps/api/event';
-import { Download, DownloadCompletePayload, DownloadErrorPayload, DownloadProgressPayload } from '@/types';
+import { Download, DownloadCompletePayload, DownloadErrorPayload, DownloadProgressPayload, DownloadFormatPreset } from '@/types';
 import { startDownload as apiStartDownload, cancelDownload as apiCancelDownload } from '@/api/invoke';
 
 export function useDownloadManager() {
@@ -52,9 +54,10 @@ export function useDownloadManager() {
     };
   }, []);
 
-  const startDownload = useCallback(async (url: string, downloadPath?: string) => {
+  const startDownload = useCallback(async (url: string, downloadPath?: string, formatPreset: DownloadFormatPreset = 'best') => {
     try {
-      const jobId = await apiStartDownload(url, downloadPath);
+      // Pass the new formatPreset argument
+      const jobId = await apiStartDownload(url, downloadPath, formatPreset); 
       setDownloads((prev) => {
         const newMap = new Map(prev);
         newMap.set(jobId, {
@@ -82,3 +85,4 @@ export function useDownloadManager() {
 
   return { downloads, startDownload, cancelDownload };
 }
+// END OF FILE src_hooks_useDownloadManager.ts.txt

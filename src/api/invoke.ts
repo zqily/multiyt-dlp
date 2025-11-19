@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/tauri";
 import { open } from "@tauri-apps/api/dialog";
+import { DownloadFormatPreset } from '@/types';
 
 export async function checkYtDlpPath(): Promise<boolean> {
   try {
@@ -20,8 +21,16 @@ export async function openExternalLink(url: string): Promise<void> {
   return await invoke("open_external_link", { url });
 }
 
-export async function startDownload(url: string, downloadPath?: string): Promise<string> {
-  return await invoke("start_download", { url, downloadPath });
+export async function startDownload(
+  url: string, 
+  downloadPath: string | undefined, 
+  formatPreset: DownloadFormatPreset // New argument
+): Promise<string> {
+  return await invoke("start_download", { 
+    url, 
+    downloadPath, 
+    formatPreset // Pass the new argument
+  });
 }
 
 export async function cancelDownload(jobId: string): Promise<void> {

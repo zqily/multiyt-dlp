@@ -1,4 +1,4 @@
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
@@ -8,6 +8,22 @@ pub enum JobStatus {
     Completed,
     Cancelled,
     Error,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DownloadFormatPreset {
+    // Video + Audio (Merged)
+    Best,
+    BestMp4,
+    BestMkv,
+    BestWebm,
+    
+    // Audio Only
+    AudioBest,
+    AudioMp3,
+    AudioFlac,
+    AudioM4a,
 }
 
 #[derive(Debug, Clone, Serialize)]

@@ -10,6 +10,18 @@ export type AppError = {
   JobAlreadyExists?: string;
 };
 
+// This mirrors the `DownloadFormatPreset` enum in the Rust backend.
+export type DownloadFormatPreset = 
+  | 'best' // Video + Audio (Default)
+  | 'best_mp4' 
+  | 'best_mkv'
+  | 'best_webm'
+  | 'audio_best' // Audio Only (Default)
+  | 'audio_mp3'
+  | 'audio_flac'
+  | 'audio_m4a';
+
+
 // --- Event Payloads ---
 
 export interface DownloadProgressPayload {

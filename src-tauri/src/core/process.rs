@@ -10,7 +10,7 @@ use uuid::Uuid;
 use std::path::PathBuf;
 
 use crate::core::manager::{JobManager, JobStatus};
-use crate::models::{DownloadCompletePayload, DownloadErrorPayload, DownloadProgressPayload};
+use crate::models::{DownloadCompletePayload, DownloadErrorPayload, DownloadProgressPayload, DownloadFormatPreset};
 
 // --- Regex Definitions ---
 
@@ -44,6 +44,7 @@ pub async fn run_download_process(
     job_id: Uuid,
     url: String,
     custom_path: Option<String>,
+    format_preset: DownloadFormatPreset, // New argument
     app_handle: AppHandle,
     manager: Arc<Mutex<JobManager>>,
 ) {
@@ -82,9 +83,38 @@ pub async fn run_download_process(
         .arg("--no-playlist")
         .arg("--no-simulate") 
         .arg("--newline")
-        // NOTE: We REMOVED "--print filename" to allow progress output on stdout/stderr naturally.
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
+
+    // --- Format Preset Logic ---
+    match format_preset {
+        DownloadFormatPreset::Best => {
+            // Default behavior: -f bestvideo*+bestaudio/best
+            // No explicit args needed other than default yt-dlp flags
+        }
+        DownloadFormatPreset::BestMp4 => {
+            cmd.args(["-f", "bestvideo+bestaudio", "--merge-output-format", "mp4"]);
+        }
+        DownloadFormatPreset::BestMkv => {
+            cmd.args(["-f", "bestvideo+bestaudio", "--merge-output-format", "mkv"]);
+        }
+        DownloadFormatPreset::BestWebm => {
+            cmd.args(["-f", "bestvideo+bestaudio", "--merge-output-format", "webm"]);
+        }
+        DownloadFormatPreset::AudioBest => {
+            cmd.arg("-x").args(["-f", "bestaudio/best"]);
+        }
+        DownloadFormatPreset::AudioMp3 => {
+            cmd.arg("-x").args(["--audio-format", "mp3", "--audio-quality", "0"]);
+        }
+        DownloadFormatPreset::AudioFlac => {
+            cmd.arg("-x").args(["--audio-format", "flac", "--audio-quality", "0"]);
+        }
+        DownloadFormatPreset::AudioM4a => {
+            cmd.arg("-x").args(["--audio-format", "m4a", "--audio-quality", "0"]);
+        }
+    }
+    // --- End Format Preset Logic ---
 
     // --- Process Spawning ---
 
