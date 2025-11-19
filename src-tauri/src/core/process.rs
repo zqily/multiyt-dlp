@@ -22,7 +22,8 @@ pub async fn run_download_process(
     app_handle: AppHandle,
     manager: Arc<Mutex<JobManager>>,
 ) {
-    let downloads_dir = match app_handle.path_resolver().download_dir() {
+    // Fix: Use tauri::api::path::download_dir() instead of path_resolver()
+    let downloads_dir = match tauri::api::path::download_dir() {
         Some(path) => path,
         None => {
             let _ = app_handle.emit_all("download-error", DownloadErrorPayload {

@@ -4,9 +4,10 @@ use uuid::Uuid;
 
 use crate::core::{
     error::AppError,
-    manager::{Job, JobManager, JobStatus},
+    manager::{JobManager, JobStatus},
     process::run_download_process,
 };
+use crate::models::Job;
 
 #[cfg(not(windows))]
 use nix::{

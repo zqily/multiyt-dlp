@@ -17,8 +17,9 @@
         "open": true
       },
       "process": {
-        "command": true,
-        "scope": ["$path/yt-dlp"]
+        "all": false,
+        "exit": true,
+        "relaunch": true
       }
     },
     "windows": [

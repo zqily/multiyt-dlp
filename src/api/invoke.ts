@@ -1,5 +1,4 @@
 import { invoke } from "@tauri-apps/api/tauri";
-import { AppError } from "@/types";
 
 export async function checkYtDlpPath(): Promise<boolean> {
   try {
