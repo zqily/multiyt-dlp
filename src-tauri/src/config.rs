@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Serialize, Deserialize)]
+#[allow(dead_code)]
 pub struct UserSettings {
     pub download_path: Option<String>,
     pub max_concurrent_downloads: u32,

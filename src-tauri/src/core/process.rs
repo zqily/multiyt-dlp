@@ -22,7 +22,6 @@ pub async fn run_download_process(
     app_handle: AppHandle,
     manager: Arc<Mutex<JobManager>>,
 ) {
-    // Fix: Use tauri::api::path::download_dir() instead of path_resolver()
     let downloads_dir = match tauri::api::path::download_dir() {
         Some(path) => path,
         None => {
@@ -69,7 +68,21 @@ pub async fn run_download_process(
     };
 
     let pid = child.id().expect("Failed to get child process ID");
-    if manager.lock().unwrap().update_job_pid(job_id, pid).is_err() {
+    
+    // Scope the lock to update PID and Status.
+    // We calculate `should_continue` so we can drop the lock before potentially awaiting `child.kill()`.
+    let should_continue = {
+        let mut manager_lock = manager.lock().unwrap();
+        if manager_lock.update_job_pid(job_id, pid).is_ok() {
+            // Mark status as Downloading (fixes unused variant warning)
+            manager_lock.update_job_status(job_id, JobStatus::Downloading).ok();
+            true
+        } else {
+            false
+        }
+    }; // Lock is dropped here
+
+    if !should_continue {
         let _ = child.kill().await;
         return;
     }

@@ -10,6 +10,7 @@ pub enum AppError {
     IoError(String),
 
     #[error("yt-dlp process failed with exit code {exit_code}: {stderr}")]
+    #[allow(dead_code)]
     ProcessFailed { exit_code: i32, stderr: String },
 
     #[error("Validation failed: {0}")]
