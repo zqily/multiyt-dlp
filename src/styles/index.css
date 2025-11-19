@@ -1,3 +1,36 @@
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+
+body {
+  @apply bg-synth-navy text-synth-light overflow-hidden;
+  background-image: 
+    linear-gradient(rgba(8, 217, 214, 0.05) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(8, 217, 214, 0.05) 1px, transparent 1px);
+  background-size: 30px 30px;
+}
+
+/* Custom Scrollbar for that retro feel */
+::-webkit-scrollbar {
+  width: 8px;
+}
+
+::-webkit-scrollbar-track {
+  @apply bg-synth-dark;
+}
+
+::-webkit-scrollbar-thumb {
+  @apply bg-synth-cyan/30 rounded-full hover:bg-synth-cyan/60 transition-colors;
+}
+
+/* Scanline effect overlay class */
+.scanlines {
+  background: linear-gradient(
+    to bottom,
+    rgba(255,255,255,0),
+    rgba(255,255,255,0) 50%,
+    rgba(0,0,0,0.1) 50%,
+    rgba(0,0,0,0.1)
+  );
+  background-size: 100% 4px;
+}

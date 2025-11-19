@@ -10,17 +10,17 @@ export interface ButtonProps extends React.ButtonHTMLAttributes<HTMLButtonElemen
 const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
   ({ className, variant = 'default', size = 'default', ...props }, ref) => {
     const variants = {
-      default: 'bg-blue-600 text-primary-foreground hover:bg-blue-600/90',
-      destructive: 'bg-red-600 text-destructive-foreground hover:bg-red-600/90',
-      outline: 'border border-input bg-background hover:bg-accent hover:text-accent-foreground',
-      secondary: 'bg-zinc-700 text-secondary-foreground hover:bg-zinc-700/80',
-      ghost: 'hover:bg-accent hover:text-accent-foreground',
-      link: 'text-primary underline-offset-4 hover:underline',
+      default: 'bg-synth-cyan text-synth-navy font-bold hover:shadow-neon-cyan border border-transparent hover:border-white/50',
+      destructive: 'bg-synth-pink text-white font-bold hover:shadow-neon-pink border border-transparent',
+      outline: 'border-2 border-synth-cyan text-synth-cyan bg-transparent hover:bg-synth-cyan hover:text-synth-navy hover:shadow-neon-cyan',
+      secondary: 'bg-synth-dark border border-synth-cyan/30 text-synth-light hover:border-synth-cyan hover:text-synth-cyan',
+      ghost: 'hover:bg-synth-cyan/10 hover:text-synth-cyan',
+      link: 'text-synth-cyan underline-offset-4 hover:underline',
     };
     const sizes = {
       default: 'h-10 px-4 py-2',
-      sm: 'h-9 rounded-md px-3',
-      lg: 'h-11 rounded-md px-8',
+      sm: 'h-9 rounded px-3',
+      lg: 'h-12 rounded px-8 text-lg',
       icon: 'h-10 w-10',
     };
 
@@ -28,7 +28,7 @@ const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
       <button
         className={twMerge(
             clsx(
-                'inline-flex items-center justify-center rounded-md text-sm font-medium ring-offset-background transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50',
+                'inline-flex items-center justify-center rounded text-sm font-mono transition-all duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-synth-pink disabled:pointer-events-none disabled:opacity-50 disabled:grayscale',
                 variants[variant],
                 sizes[size],
                 className

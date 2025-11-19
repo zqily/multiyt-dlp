@@ -58,4 +58,5 @@ export interface Download {
   error?: string;
   filename?: string;
   phase?: string;
+  preset?: DownloadFormatPreset; // Added to track the type of download
 }

@@ -1,5 +1,3 @@
-// START OF FILE src_hooks_useDownloadManager.ts.txt
-
 import { useState, useEffect, useCallback } from 'react';
 import { listen } from '@tauri-apps/api/event';
 import { Download, DownloadCompletePayload, DownloadErrorPayload, DownloadProgressPayload, DownloadFormatPreset } from '@/types';
@@ -65,6 +63,7 @@ export function useDownloadManager() {
           url,
           status: 'pending',
           progress: 0,
+          preset: formatPreset, // Save the preset here
         });
         return newMap;
       });
@@ -85,4 +84,3 @@ export function useDownloadManager() {
 
   return { downloads, startDownload, cancelDownload };
 }
-// END OF FILE src_hooks_useDownloadManager.ts.txt

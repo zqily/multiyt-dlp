@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { Button } from './ui/Button';
 import { Card, CardContent, CardHeader, CardTitle } from './ui/Card';
-import { Download, FolderOpen, FileVideo, Music } from 'lucide-react';
+import { Download, FolderOpen, FileVideo, Music, Radio } from 'lucide-react';
 import { selectDirectory } from '@/api/invoke';
 import { DownloadFormatPreset } from '@/types';
 import { twMerge } from 'tailwind-merge';
@@ -17,17 +17,14 @@ const formatPresets: {
   value: DownloadFormatPreset;
   mode: DownloadMode;
 }[] = [
-  // Video Group (Video + Audio)
-  { label: 'Best Quality (Merged/Default)', value: 'best', mode: 'video' },
-  { label: 'Best MP4 (Merged)', value: 'best_mp4', mode: 'video' },
-  { label: 'Best MKV (Merged)', value: 'best_mkv', mode: 'video' },
-  { label: 'Best WebM (Merged)', value: 'best_webm', mode: 'video' },
-  
-  // Audio Only Group
-  { label: 'Best Audio Only (Default)', value: 'audio_best', mode: 'audio' },
-  { label: 'MP3 Audio Only', value: 'audio_mp3', mode: 'audio' },
-  { label: 'FLAC Audio Only (Lossless)', value: 'audio_flac', mode: 'audio' },
-  { label: 'M4A Audio Only', value: 'audio_m4a', mode: 'audio' },
+  { label: 'Best Quality', value: 'best', mode: 'video' },
+  { label: 'Best MP4', value: 'best_mp4', mode: 'video' },
+  { label: 'Best MKV', value: 'best_mkv', mode: 'video' },
+  { label: 'Best WebM', value: 'best_webm', mode: 'video' },
+  { label: 'Best Audio', value: 'audio_best', mode: 'audio' },
+  { label: 'MP3 Audio', value: 'audio_mp3', mode: 'audio' },
+  { label: 'FLAC (Lossless)', value: 'audio_flac', mode: 'audio' },
+  { label: 'M4A Audio', value: 'audio_m4a', mode: 'audio' },
 ];
 
 interface ModeButtonProps {
@@ -46,10 +43,10 @@ const ModeButton: React.FC<ModeButtonProps> = ({ mode, currentMode, icon: Icon, 
             onClick={() => onClick(mode)}
             title={label}
             className={twMerge(
-                'flex items-center justify-center p-2 rounded-md transition-colors border text-sm',
+                'flex items-center justify-center p-3 rounded-lg transition-all duration-300 border',
                 isActive
-                    ? 'bg-blue-600 border-blue-600 text-white'
-                    : 'bg-zinc-700 border-zinc-600 text-zinc-300 hover:bg-zinc-600'
+                    ? 'bg-synth-cyan text-synth-navy border-synth-cyan shadow-neon-cyan'
+                    : 'bg-synth-navy border-synth-cyan/20 text-synth-cyan/50 hover:text-synth-cyan hover:border-synth-cyan/50 hover:bg-synth-cyan/5'
             )}
         >
             <Icon className="h-5 w-5" />
@@ -57,12 +54,9 @@ const ModeButton: React.FC<ModeButtonProps> = ({ mode, currentMode, icon: Icon, 
     );
 };
 
-
 export function DownloadForm({ onDownload }: DownloadFormProps) {
   const [url, setUrl] = useState('');
   const [downloadPath, setDownloadPath] = useState<string>('');
-  
-  // New state for mode and selected format
   const [mode, setMode] = useState<DownloadMode>('video');
   const [selectedFormat, setSelectedFormat] = useState<DownloadFormatPreset>('best');
 
@@ -87,8 +81,6 @@ export function DownloadForm({ onDownload }: DownloadFormProps) {
   
   const handleModeChange = (newMode: DownloadMode) => {
     setMode(newMode);
-    
-    // Automatically select the default preset for the new mode
     if (newMode === 'video') {
         setSelectedFormat('best');
     } else {
@@ -100,81 +92,88 @@ export function DownloadForm({ onDownload }: DownloadFormProps) {
   const filteredPresets = formatPresets.filter(p => p.mode === mode);
 
   return (
-    <Card>
+    <Card className="border-synth-cyan/30 bg-synth-dark/50">
       <CardHeader>
-        <CardTitle>Input / Output</CardTitle>
+        <CardTitle className="flex items-center gap-2">
+            <Radio className="h-5 w-5 animate-pulse text-synth-pink" />
+            Input Sequence
+        </CardTitle>
       </CardHeader>
       <CardContent>
-        <form onSubmit={handleSubmit} className="flex flex-col gap-4">
+        <form onSubmit={handleSubmit} className="flex flex-col gap-5">
+          
           {/* URL Input */}
-          <div className="flex gap-2">
+          <div className="relative group">
+            <div className="absolute -inset-0.5 bg-gradient-to-r from-synth-cyan to-synth-pink rounded-lg blur opacity-20 group-hover:opacity-50 transition duration-200"></div>
             <input
                 type="text"
                 value={url}
                 onChange={(e) => setUrl(e.target.value)}
-                placeholder="Enter video URL..."
-                className="flex-grow bg-zinc-700 border border-zinc-600 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                placeholder="Paste URL here..."
+                className="relative w-full bg-synth-navy border border-synth-cyan/30 rounded-lg px-4 py-3 text-sm font-mono text-synth-cyan placeholder-synth-cyan/30 focus:outline-none focus:border-synth-cyan focus:shadow-neon-cyan transition-all"
             />
           </div>
           
-          {/* Download Path Input and Selector */}
+          {/* Download Path */}
           <div className="flex gap-2 items-center">
-             <input
-                type="text"
-                value={downloadPath}
-                readOnly
-                placeholder="Default System Downloads Folder"
-                className="flex-grow bg-zinc-700/50 border border-zinc-600 rounded-md px-3 py-2 text-sm text-zinc-300 cursor-not-allowed focus:outline-none"
-             />
-             <Button type="button" variant="secondary" onClick={handleSelectDirectory} title="Select Output Folder">
+             <div className="relative flex-grow">
+                 <input
+                    type="text"
+                    value={downloadPath}
+                    readOnly
+                    placeholder="Default Downloads"
+                    className="w-full bg-synth-dark border border-synth-cyan/20 rounded-lg px-3 py-2 text-xs font-mono text-synth-light/50 cursor-not-allowed focus:outline-none"
+                 />
+             </div>
+             <Button 
+                type="button" 
+                variant="secondary" 
+                onClick={handleSelectDirectory} 
+                className="h-full aspect-square p-0 flex items-center justify-center"
+             >
                 <FolderOpen className="h-4 w-4" />
              </Button>
           </div>
 
-          {/* Format Selection (Mode + Dropdown) */}
-          <div className="flex gap-2 items-center">
-            {/* Mode Toggles */}
-            <ModeButton 
-                mode="video" 
-                currentMode={mode} 
-                onClick={handleModeChange} 
-                icon={FileVideo}
-                label="Download Video + Audio"
-            />
-            <ModeButton 
-                mode="audio" 
-                currentMode={mode} 
-                onClick={handleModeChange} 
-                icon={Music}
-                label="Download Audio Only"
-            />
+          {/* Controls */}
+          <div className="flex gap-3 items-stretch h-12">
+            <div className="flex gap-2">
+                <ModeButton mode="video" currentMode={mode} onClick={handleModeChange} icon={FileVideo} label="Video" />
+                <ModeButton mode="audio" currentMode={mode} onClick={handleModeChange} icon={Music} label="Audio" />
+            </div>
 
-            {/* Dynamic Dropdown */}
-            <div className="relative flex-grow transition-all duration-300">
+            <div className="relative flex-grow group">
+                 <div className="absolute inset-y-0 right-0 flex items-center px-2 pointer-events-none text-synth-cyan z-10 bg-synth-navy/80 rounded-r-lg border-l border-synth-cyan/20">
+                    <span className="text-[10px] font-bold">&#9660;</span>
+                </div>
                 <select
                     value={selectedFormat}
                     onChange={(e) => setSelectedFormat(e.target.value as DownloadFormatPreset)}
-                    className="w-full bg-zinc-700 border border-zinc-600 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 text-white appearance-none pr-8"
+                    className="w-full h-full bg-synth-navy border border-synth-cyan/30 rounded-lg pl-3 pr-8 text-sm font-mono text-synth-cyan focus:outline-none focus:ring-1 focus:ring-synth-cyan appearance-none hover:bg-synth-cyan/5 cursor-pointer transition-colors"
                 >
                     {filteredPresets.map(p => (
-                        // We must ensure the selected format is one of the displayed options
-                        // If the user clicks on 'Audio', the selectedFormat will automatically become 'audio_best'
-                        <option key={p.value} value={p.value}>
+                        <option key={p.value} value={p.value} className="bg-synth-navy text-white">
                             {p.label}
                         </option>
                     ))}
                 </select>
-                {/* Custom chevron to fix appearance-none */}
-                <span className="absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none text-zinc-400">
-                    &#9662;
-                </span>
             </div>
           </div>
 
-
-          <Button type="submit" disabled={!isValidUrl} className="w-full">
-            <Download className="mr-2 h-4 w-4" />
-            Start Download
+          <Button 
+            type="submit" 
+            disabled={!isValidUrl} 
+            className={twMerge(
+                "w-full h-12 text-base tracking-wider uppercase relative overflow-hidden group",
+                !isValidUrl ? "opacity-50" : "hover:shadow-[0_0_20px_rgba(8,217,214,0.4)]"
+            )}
+            variant={isValidUrl ? 'default' : 'secondary'}
+          >
+            <span className="relative z-10 flex items-center">
+                <Download className={twMerge("mr-2 h-5 w-5", isValidUrl && "animate-bounce")} />
+                Initialize Download
+            </span>
+            {isValidUrl && <div className="absolute inset-0 bg-white/20 skew-x-12 -translate-x-full group-hover:animate-[shimmer_1s_infinite]"></div>}
           </Button>
         </form>
       </CardContent>
