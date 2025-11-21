@@ -23,13 +23,33 @@
         "all": false,
         "exit": true,
         "relaunch": true
+      },
+      "window": {
+        "all": true
       }
     },
     "windows": [
       {
+        "label": "splashscreen",
+        "title": "Loading...",
+        "url": "index.html",
+        "width": 400,
+        "height": 500,
+        "center": true,
+        "resizable": false,
+        "decorations": false,
+        "alwaysOnTop": true,
+        "transparent": true,
+        "visible": true
+      },
+      {
+        "label": "main",
         "title": "Multiyt-dlp",
         "width": 1200,
-        "height": 800
+        "height": 800,
+        "center": true,
+        "resizable": true,
+        "visible": false
       }
     ],
     "security": {

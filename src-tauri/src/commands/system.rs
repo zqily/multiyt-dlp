@@ -1,5 +1,5 @@
 use std::process::Command;
-use tauri::{AppHandle, Manager};
+use tauri::{AppHandle, Manager, Window};
 use serde::Serialize;
 
 #[derive(Serialize)]
@@ -46,4 +46,18 @@ pub fn check_dependencies() -> AppDependencies {
 pub fn open_external_link(app_handle: AppHandle, url: String) -> Result<(), String> {
     tauri::api::shell::open(&app_handle.shell_scope(), url, None)
         .map_err(|e| format!("Failed to open URL: {}", e))
+}
+
+// Transition from Splash to Main
+#[tauri::command]
+pub fn close_splash(window: Window) {
+    // Close splashscreen
+    if let Some(splash) = window.get_window("splashscreen") {
+        splash.close().unwrap();
+    }
+    // Show main window
+    if let Some(main) = window.get_window("main") {
+        main.show().unwrap();
+        main.set_focus().unwrap();
+    }
 }

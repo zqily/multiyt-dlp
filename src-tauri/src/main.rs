@@ -36,6 +36,8 @@ fn main() {
                 x: config.window.x as i32,
                 y: config.window.y as i32,
             }));
+            
+            // Note: We don't show main window here. It stays hidden until Splash invokes close_splash
 
             Ok(())
         })
@@ -61,9 +63,9 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             commands::system::check_dependencies,
             commands::system::open_external_link,
+            commands::system::close_splash, // Added here
             commands::downloader::start_download,
             commands::downloader::cancel_download,
-            // New config commands
             commands::config::get_app_config,
             commands::config::save_general_config,
             commands::config::save_preference_config,

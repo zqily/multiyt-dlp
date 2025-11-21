@@ -12,6 +12,10 @@ export async function openExternalLink(url: string): Promise<void> {
   return await invoke("open_external_link", { url });
 }
 
+export async function closeSplash(): Promise<void> {
+  return await invoke("close_splash");
+}
+
 // --- Config API ---
 
 export async function getAppConfig(): Promise<AppConfig> {

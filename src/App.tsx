@@ -1,14 +1,29 @@
-// src/App.tsx
-
+import React, { useEffect, useState } from 'react';
+import { appWindow } from '@tauri-apps/api/window';
 import { DownloadForm } from './components/DownloadForm';
 import { DownloadQueue } from './components/DownloadQueue';
-import { EnvironmentGate } from './components/EnvironmentGate';
 import { useDownloadManager } from './hooks/useDownloadManager';
 import { Layout } from './components/Layout';
+import { SplashWindow } from './components/SplashWindow';
 import { Activity, CheckCircle2, AlertCircle, List, Database } from 'lucide-react';
 
 function App() {
+  const [windowLabel, setWindowLabel] = useState<string | null>(null);
   const { downloads, startDownload, cancelDownload } = useDownloadManager();
+
+  useEffect(() => {
+    // Determine which Tauri window holds this React instance
+    appWindow.label.then(setWindowLabel);
+  }, []);
+
+  if (!windowLabel) return null;
+
+  // --- SPLASH SCREEN ROUTE ---
+  if (windowLabel === 'splashscreen') {
+      return <SplashWindow />;
+  }
+
+  // --- MAIN APP ROUTE ---
 
   // Calculate Stats
   const total = downloads.size;
@@ -17,7 +32,6 @@ function App() {
   const failed = Array.from(downloads.values()).filter(d => d.status === 'error').length;
 
   return (
-    <EnvironmentGate>
       <Layout
         SidebarContent={
           <DownloadForm onDownload={startDownload} />
@@ -79,7 +93,6 @@ function App() {
           </>
         }
       />
-    </EnvironmentGate>
   );
 }
 
