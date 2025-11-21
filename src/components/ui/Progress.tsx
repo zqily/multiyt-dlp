@@ -1,12 +1,13 @@
 import React from 'react';
 import { twMerge } from 'tailwind-merge';
 
-interface ProgressProps extends React.ProgressHTMLAttributes<HTMLProgressElement> {
+interface ProgressProps extends React.HTMLAttributes<HTMLDivElement> {
+    value?: number;
     variant?: 'default' | 'success' | 'error';
 }
 
-const Progress = React.forwardRef<HTMLProgressElement, ProgressProps>(
-  ({ className, value, variant = 'default' }) => {
+const Progress = React.forwardRef<HTMLDivElement, ProgressProps>(
+  ({ className, value = 0, variant = 'default', ...props }, ref) => {
     
     // Default maps to our Cyan theme
     const colors = {
@@ -16,7 +17,11 @@ const Progress = React.forwardRef<HTMLProgressElement, ProgressProps>(
     };
 
     return (
-      <div className={twMerge("relative w-full h-1 bg-zinc-900 rounded-full overflow-hidden", className)}>
+      <div 
+        ref={ref} 
+        className={twMerge("relative w-full h-1 bg-zinc-900 rounded-full overflow-hidden", className)}
+        {...props}
+      >
         <div 
             className={twMerge(
                 "h-full transition-all duration-300 ease-out rounded-full",

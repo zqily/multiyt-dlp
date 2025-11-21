@@ -36,12 +36,37 @@ fn main() {
                 x: config.window.x as i32,
                 y: config.window.y as i32,
             }));
-            
-            // Note: We don't show main window here. It stays hidden until Splash invokes close_splash
+
+            // Optional: Open DevTools in debug mode for both windows to help troubleshooting
+            #[cfg(debug_assertions)]
+            {
+                // main_window.open_devtools(); 
+                // Prefixing with underscore tells Rust this variable might be unused
+                if let Some(_splash) = app.get_window("splashscreen") {
+                    // _splash.open_devtools(); 
+                }
+            }
 
             Ok(())
         })
         .on_window_event(move |event| {
+            // --- Zombie Process Fix ---
+            if let WindowEvent::Destroyed = event.event() {
+                let window_label = event.window().label();
+                if window_label == "splashscreen" {
+                    // Check if main window is visible. If not, exit app.
+                    let app_handle = event.window().app_handle();
+                    if let Some(main) = app_handle.get_window("main") {
+                        if !main.is_visible().unwrap_or(false) {
+                            // If splash closed and main is hidden, the user likely closed splash manually
+                            app_handle.exit(0);
+                        }
+                    } else {
+                        app_handle.exit(0);
+                    }
+                }
+            }
+
             if let WindowEvent::Moved(pos) = event.event() {
                 let mut current_config = config_manager_event.get_config();
                 current_config.window.x = pos.x as f64;
@@ -63,9 +88,10 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             commands::system::check_dependencies,
             commands::system::open_external_link,
-            commands::system::close_splash, // Added here
+            commands::system::close_splash,
             commands::downloader::start_download,
             commands::downloader::cancel_download,
+            // New config commands
             commands::config::get_app_config,
             commands::config::save_general_config,
             commands::config::save_preference_config,

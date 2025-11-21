@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { checkDependencies, closeSplash, openExternalLink } from '@/api/invoke';
 import icon from '@/assets/icon.png';
 import { RefreshCw, ExternalLink, Check } from 'lucide-react';
@@ -11,13 +11,19 @@ export function SplashWindow() {
   const [status, setStatus] = useState<'loading' | 'error' | 'ready'>('loading');
   const [message, setMessage] = useState('Initializing Core...');
   const [missingDeps, setMissingDeps] = useState<{ yt_dlp: boolean; ffmpeg: boolean }>({ yt_dlp: false, ffmpeg: false });
+  
+  // Ref to prevent StrictMode double-invocation in dev
+  const hasRun = useRef(false);
 
   const runChecks = async () => {
+    if (hasRun.current) return;
+    hasRun.current = true;
+
     setStatus('loading');
     setMessage('Scanning System Environment...');
     
     try {
-      // Artificial delay to show off the fancy animation (and allow backend to init)
+      // Artificial delay to show off the fancy animation
       await new Promise(resolve => setTimeout(resolve, 1500));
 
       const deps = await checkDependencies();
@@ -33,13 +39,17 @@ export function SplashWindow() {
       } else {
         setStatus('ready');
         setMessage('System Optimal. Launching...');
-        // Small delay before closing to show the "Ready" state
-        setTimeout(() => {
-            closeSplash();
+        
+        setTimeout(async () => {
+            try {
+                await closeSplash();
+            } catch (err) {
+                setMessage("Failed to launch Main Window");
+                setStatus('error');
+            }
         }, 800);
       }
     } catch (e) {
-      console.error(e);
       setStatus('error');
       setMessage('Initialization Failed');
     }
@@ -50,7 +60,7 @@ export function SplashWindow() {
   }, []);
 
   return (
-    <div className="h-screen w-screen bg-zinc-950 flex flex-col items-center justify-center relative overflow-hidden border-2 border-zinc-900">
+    <div className="h-screen w-screen bg-zinc-950 flex flex-col items-center justify-center relative overflow-hidden border-2 border-zinc-900 cursor-default select-none">
       {/* Background Grid Effect */}
       <div className="absolute inset-0 bg-[linear-gradient(rgba(18,18,18,0)_1px,transparent_1px),linear-gradient(90deg,rgba(18,18,18,0)_1px,transparent_1px)] bg-[size:40px_40px] [mask-image:radial-gradient(ellipse_80%_50%_at_50%_50%,black,transparent)] pointer-events-none" />
 
@@ -98,7 +108,7 @@ export function SplashWindow() {
                 <Button 
                     size="sm" 
                     className="w-full mt-2 border-zinc-700 bg-zinc-800 hover:bg-zinc-700"
-                    onClick={runChecks}
+                    onClick={() => { hasRun.current = false; runChecks(); }}
                 >
                     <RefreshCw className="mr-2 h-3 w-3" /> Retry Connection
                 </Button>

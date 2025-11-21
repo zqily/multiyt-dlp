@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { appWindow } from '@tauri-apps/api/window';
 import { DownloadForm } from './components/DownloadForm';
 import { DownloadQueue } from './components/DownloadQueue';
@@ -12,8 +12,8 @@ function App() {
   const { downloads, startDownload, cancelDownload } = useDownloadManager();
 
   useEffect(() => {
-    // Determine which Tauri window holds this React instance
-    appWindow.label.then(setWindowLabel);
+    // appWindow.label is a string, not a Promise
+    setWindowLabel(appWindow.label);
   }, []);
 
   if (!windowLabel) return null;

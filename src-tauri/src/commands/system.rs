@@ -1,5 +1,5 @@
 use std::process::Command;
-use tauri::{AppHandle, Manager, Window};
+use tauri::{AppHandle, Manager};
 use serde::Serialize;
 
 #[derive(Serialize)]
@@ -50,14 +50,13 @@ pub fn open_external_link(app_handle: AppHandle, url: String) -> Result<(), Stri
 
 // Transition from Splash to Main
 #[tauri::command]
-pub fn close_splash(window: Window) {
-    // Close splashscreen
-    if let Some(splash) = window.get_window("splashscreen") {
-        splash.close().unwrap();
+pub fn close_splash(app_handle: AppHandle) {
+    if let Some(splash) = app_handle.get_window("splashscreen") {
+        let _ = splash.close();
     }
-    // Show main window
-    if let Some(main) = window.get_window("main") {
-        main.show().unwrap();
-        main.set_focus().unwrap();
+
+    if let Some(main) = app_handle.get_window("main") {
+        let _ = main.show();
+        let _ = main.set_focus();
     }
 }
