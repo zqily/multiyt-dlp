@@ -1,10 +1,13 @@
-// src/types/index.ts
-
 // --- Data Contracts ---
+
+export interface AppDependencies {
+  yt_dlp: boolean;
+  ffmpeg: boolean;
+  js_runtime: boolean;
+}
 
 // This mirrors the `AppError` enum in the Rust backend.
 export type AppError = {
-  YtDlpNotFound?: string;
   IoError?: string;
   ProcessFailed?: { exit_code: number; stderr: string };
   ValidationFailed?: string;

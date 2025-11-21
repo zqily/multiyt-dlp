@@ -5,6 +5,10 @@ interface AppContextType {
   defaultDownloadPath: string | null;
   setDefaultDownloadPath: (path: string) => void;
   
+  // Dependencies State
+  isJsRuntimeMissing: boolean;
+  setIsJsRuntimeMissing: (missing: boolean) => void;
+
   // Filename Template Settings
   filenameTemplateBlocks: TemplateBlock[];
   setFilenameTemplateBlocks: (blocks: TemplateBlock[]) => void;
@@ -22,6 +26,7 @@ export const AppContext = React.createContext<AppContextType | undefined>(undefi
 export const AppProvider = ({ children }: { children: React.ReactNode }) => {
   const [defaultDownloadPath, setDefaultDownloadPath] = useState<string | null>(null);
   const [filenameTemplateBlocks, setFilenameTemplateBlocks] = useState<TemplateBlock[]>(DEFAULT_TEMPLATE_BLOCKS);
+  const [isJsRuntimeMissing, setIsJsRuntimeMissing] = useState(false);
 
   // Helper to convert blocks to yt-dlp string
   // e.g. [Title] [.] [Ext] -> "%(title)s.%(ext)s"
@@ -37,6 +42,8 @@ export const AppProvider = ({ children }: { children: React.ReactNode }) => {
   const value = {
     defaultDownloadPath,
     setDefaultDownloadPath,
+    isJsRuntimeMissing,
+    setIsJsRuntimeMissing,
     filenameTemplateBlocks,
     setFilenameTemplateBlocks,
     getTemplateString

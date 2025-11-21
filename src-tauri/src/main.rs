@@ -15,7 +15,7 @@ fn main() {
     tauri::Builder::default()
         .manage(job_manager)
         .invoke_handler(tauri::generate_handler![
-            commands::system::check_yt_dlp_path,
+            commands::system::check_dependencies,
             commands::system::open_external_link,
             commands::downloader::start_download,
             commands::downloader::cancel_download

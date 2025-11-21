@@ -1,9 +1,7 @@
-// src/components/DownloadForm.tsx
-
 import React, { useState } from 'react';
 import { Button } from './ui/Button';
 import { Card, CardContent } from './ui/Card';
-import { Download, FolderOpen, Link2, MonitorPlay, Headphones, FileText, Image as ImageIcon } from 'lucide-react';
+import { Download, FolderOpen, Link2, MonitorPlay, Headphones, FileText, Image as ImageIcon, AlertTriangle } from 'lucide-react';
 import { selectDirectory } from '@/api/invoke';
 import { DownloadFormatPreset } from '@/types';
 import { useAppContext } from '@/contexts/AppContext';
@@ -70,7 +68,7 @@ const ModeButton: React.FC<ModeButtonProps> = ({ mode, currentMode, icon: Icon, 
 };
 
 export function DownloadForm({ onDownload }: DownloadFormProps) {
-  const { getTemplateString } = useAppContext();
+  const { getTemplateString, isJsRuntimeMissing } = useAppContext();
   
   const [url, setUrl] = useState('');
   const [downloadPath, setDownloadPath] = useState<string>('');
@@ -83,6 +81,18 @@ export function DownloadForm({ onDownload }: DownloadFormProps) {
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (url.trim()) {
+      // Contextual Warning for YouTube + Missing JS Runtime
+      const isYoutube = url.includes('youtube.com') || url.includes('youtu.be');
+      if (isYoutube && isJsRuntimeMissing) {
+          const confirmed = window.confirm(
+              "JavaScript Runtime Missing\n\n" +
+              "You are attempting to download from YouTube without a configured JavaScript runtime (Node.js, Deno, or Bun).\n\n" +
+              "Recent YouTube changes require this to function correctly. The download may fail, be slow, or have limited quality.\n\n" +
+              "Do you want to proceed anyway?"
+          );
+          if (!confirmed) return;
+      }
+
       const template = getTemplateString();
       onDownload(url, downloadPath || undefined, selectedFormat, embedMetadata, embedThumbnail, template);
       setUrl('');
@@ -111,6 +121,8 @@ export function DownloadForm({ onDownload }: DownloadFormProps) {
 
   const isValidUrl = url.startsWith('http://') || url.startsWith('https://');
   const filteredPresets = formatPresets.filter(p => p.mode === mode);
+  
+  const isYoutube = url.includes('youtube.com') || url.includes('youtu.be');
 
   return (
     <Card className="bg-transparent border-0 shadow-none p-0">
@@ -119,7 +131,15 @@ export function DownloadForm({ onDownload }: DownloadFormProps) {
           
           {/* URL Input */}
           <div className="space-y-2">
-            <label className="text-[11px] uppercase tracking-wider font-bold text-zinc-500 ml-1">Target URL</label>
+            <div className="flex justify-between">
+                <label className="text-[11px] uppercase tracking-wider font-bold text-zinc-500 ml-1">Target URL</label>
+                {isYoutube && isJsRuntimeMissing && (
+                     <span className="flex items-center gap-1 text-[10px] font-bold text-amber-500 bg-amber-500/10 px-2 py-0.5 rounded animate-pulse">
+                        <AlertTriangle className="h-3 w-3" />
+                        JS RUNTIME NEEDED
+                     </span>
+                )}
+            </div>
             <div className="relative group">
                 <div className="absolute inset-0 bg-theme-cyan/20 blur-md rounded-lg opacity-0 group-focus-within:opacity-100 transition-opacity duration-500"></div>
                 <Link2 className="absolute left-3 top-3 h-4 w-4 text-zinc-500 group-focus-within:text-theme-cyan transition-colors" />
@@ -128,7 +148,12 @@ export function DownloadForm({ onDownload }: DownloadFormProps) {
                     value={url}
                     onChange={(e) => setUrl(e.target.value)}
                     placeholder="https://youtube.com/watch?v=..."
-                    className="relative w-full bg-surfaceHighlight border border-border rounded-md pl-10 pr-4 py-2.5 text-sm text-zinc-100 placeholder-zinc-700 focus:outline-none focus:ring-1 focus:ring-theme-cyan focus:border-theme-cyan transition-all"
+                    className={twMerge(
+                        "relative w-full bg-surfaceHighlight border rounded-md pl-10 pr-4 py-2.5 text-sm text-zinc-100 placeholder-zinc-700 focus:outline-none focus:ring-1 transition-all",
+                        isYoutube && isJsRuntimeMissing 
+                            ? "border-amber-500/50 focus:border-amber-500 focus:ring-amber-500" 
+                            : "border-border focus:ring-theme-cyan focus:border-theme-cyan"
+                    )}
                 />
             </div>
           </div>

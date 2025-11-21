@@ -1,16 +1,44 @@
 use std::process::Command;
 use tauri::{AppHandle, Manager};
+use serde::Serialize;
 
-use crate::core::error::AppError;
+#[derive(Serialize)]
+pub struct AppDependencies {
+    pub yt_dlp: bool,
+    pub ffmpeg: bool,
+    pub js_runtime: bool,
+}
 
-// Checks if yt-dlp is available in the system's PATH
+// Checks if yt-dlp, ffmpeg, and a valid JS runtime are available in the system's PATH
 #[tauri::command]
-pub fn check_yt_dlp_path() -> Result<bool, AppError> {
-    Command::new("yt-dlp")
+pub fn check_dependencies() -> AppDependencies {
+    let yt_dlp = Command::new("yt-dlp")
         .arg("--version")
         .output()
-        .map(|output| output.status.success())
-        .map_err(|_| AppError::YtDlpNotFound)
+        .map(|o| o.status.success())
+        .unwrap_or(false);
+
+    let ffmpeg = Command::new("ffmpeg")
+        .arg("-version") // ffmpeg uses -version, not --version
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false);
+
+    // Check for any supported JS runtime (Deno is preferred by yt-dlp, then Node, then Bun)
+    let runtimes = ["deno", "node", "bun"];
+    let js_runtime = runtimes.iter().any(|r| {
+        Command::new(r)
+            .arg("--version")
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false)
+    });
+
+    AppDependencies {
+        yt_dlp,
+        ffmpeg,
+        js_runtime,
+    }
 }
 
 // Opens a URL in the user's default browser

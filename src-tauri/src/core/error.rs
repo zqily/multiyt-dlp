@@ -3,9 +3,6 @@ use thiserror::Error;
 
 #[derive(Debug, Error, Serialize)]
 pub enum AppError {
-    #[error("yt-dlp executable not found in system PATH.")]
-    YtDlpNotFound,
-
     #[error("I/O Error: {0}")]
     IoError(String),
 

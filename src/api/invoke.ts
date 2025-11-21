@@ -1,18 +1,9 @@
-// src/api/invoke.ts
-
 import { invoke } from "@tauri-apps/api/tauri";
 import { open } from "@tauri-apps/api/dialog";
-import { DownloadFormatPreset } from '@/types';
+import { DownloadFormatPreset, AppDependencies } from '@/types';
 
-export async function checkYtDlpPath(): Promise<boolean> {
-  try {
-    return await invoke("check_yt_dlp_path");
-  } catch (error) {
-    if (error === "YtDlpNotFound") {
-      return false;
-    }
-    throw error;
-  }
+export async function checkDependencies(): Promise<AppDependencies> {
+    return await invoke("check_dependencies");
 }
 
 export async function openExternalLink(url: string): Promise<void> {

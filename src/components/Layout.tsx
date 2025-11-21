@@ -1,9 +1,10 @@
 // src/components/Layout.tsx
 
 import { ReactNode, useState } from 'react';
-import { Settings } from 'lucide-react';
+import { Settings, AlertTriangle } from 'lucide-react';
 import { Button } from './ui/Button';
 import { SettingsModal } from './settings/SettingsModal';
+import { useAppContext } from '@/contexts/AppContext';
 
 interface LayoutProps {
   SidebarContent: ReactNode;
@@ -12,6 +13,7 @@ interface LayoutProps {
 
 export function Layout({ SidebarContent, MainContent }: LayoutProps) {
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const { isJsRuntimeMissing } = useAppContext();
 
   return (
     <div className="flex h-screen overflow-hidden bg-zinc-900 text-zinc-100">
@@ -38,6 +40,17 @@ export function Layout({ SidebarContent, MainContent }: LayoutProps) {
                 <Settings className="h-5 w-5" />
             </Button>
         </div>
+
+        {isJsRuntimeMissing && (
+            <div className="mb-6 px-3 py-3 bg-amber-950/20 border border-amber-500/20 rounded-lg text-amber-500 flex gap-3">
+                <AlertTriangle className="h-5 w-5 flex-shrink-0" />
+                <div className="text-xs leading-relaxed">
+                    <span className="font-bold block mb-1">Limited Functionality</span>
+                    No JavaScript runtime detected (Node, Deno, or Bun). YouTube downloads may fail or be restricted.
+                </div>
+            </div>
+        )}
+
         {SidebarContent}
       </aside>
       
