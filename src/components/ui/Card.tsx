@@ -8,14 +8,11 @@ const Card = React.forwardRef<
   <div
     ref={ref}
     className={twMerge(
-      "rounded-xl border-2 border-synth-cyan/20 bg-synth-dark/90 backdrop-blur-sm shadow-lg text-synth-light relative overflow-hidden group transition-all hover:border-synth-cyan/50", 
+      "rounded-lg border border-zinc-800 bg-zinc-900/40 text-zinc-100 shadow-sm", 
       className
     )}
     {...props}
   >
-    {/* Decorative corner accent */}
-    <div className="absolute top-0 right-0 w-4 h-4 border-t-2 border-r-2 border-synth-pink opacity-50 group-hover:opacity-100 transition-opacity" />
-    <div className="absolute bottom-0 left-0 w-4 h-4 border-b-2 border-l-2 border-synth-pink opacity-50 group-hover:opacity-100 transition-opacity" />
     {props.children}
   </div>
 ));
@@ -39,7 +36,7 @@ const CardTitle = React.forwardRef<
 >(({ className, ...props }, ref) => (
   <h3
     ref={ref}
-    className={twMerge("text-xl font-bold leading-none tracking-wider text-synth-cyan uppercase font-mono", className)}
+    className={twMerge("font-semibold leading-none tracking-tight", className)}
     {...props}
   />
 ));

@@ -7,23 +7,25 @@ interface LayoutProps {
 
 export function Layout({ SidebarContent, MainContent }: LayoutProps) {
   return (
-    <div className="flex h-screen overflow-hidden bg-synth-navy text-synth-light font-sans selection:bg-synth-pink selection:text-white">
+    <div className="flex h-screen overflow-hidden bg-zinc-950 text-zinc-100">
       {/* Sidebar */}
-      <aside className="w-80 flex-shrink-0 bg-synth-dark/80 border-r border-synth-cyan/20 p-4 overflow-y-auto backdrop-blur-md relative z-10 flex flex-col shadow-2xl">
-        <div className="mb-6 mt-2 text-center">
-            <h1 className="text-2xl font-black italic tracking-tighter text-transparent bg-clip-text bg-gradient-to-r from-synth-cyan to-synth-pink drop-shadow-[0_0_5px_rgba(8,217,214,0.5)]">
-                MULTIYT-DLP
+      <aside className="w-80 flex-shrink-0 bg-zinc-900/50 border-r border-zinc-800 p-4 overflow-y-auto flex flex-col">
+        <div className="mb-8 mt-4 px-2">
+            <h1 className="text-lg font-bold tracking-tight text-white">
+                Multiyt-dlp
             </h1>
-            <div className="text-[10px] font-mono text-synth-cyan/60 tracking-[0.2em] uppercase mt-1">
-                System Ready
+            <div className="text-xs text-zinc-500 mt-1">
+                Concurrent Video Downloader
             </div>
         </div>
         {SidebarContent}
       </aside>
       
       {/* Main Content */}
-      <main className="flex-grow p-6 overflow-y-auto relative z-0 scanlines">
-        {MainContent}
+      <main className="flex-grow p-8 overflow-y-auto bg-zinc-950">
+        <div className="max-w-4xl mx-auto">
+            {MainContent}
+        </div>
       </main>
     </div>
   );

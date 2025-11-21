@@ -1,23 +1,12 @@
 import { Download } from '@/types';
 import { Progress } from './ui/Progress';
 import { Button } from './ui/Button';
-import { X, FileVideo, Clock, CheckCircle2, AlertTriangle, Headphones } from 'lucide-react';
+import { X, MonitorPlay, Clock, CheckCircle2, AlertCircle, Headphones, Activity } from 'lucide-react';
 import { twMerge } from 'tailwind-merge';
 
 interface DownloadItemProps {
   download: Download;
   onCancel: (jobId: string) => void;
-}
-
-// Define the interface to ensure all themes are compatible
-interface Theme {
-    icon: React.ElementType;
-    text: string;
-    border: string;
-    bg: string;
-    shadow: string;
-    progress: 'cyan' | 'pink' | 'green' | 'red';
-    label: string;
 }
 
 export function DownloadItem({ download, onCancel }: DownloadItemProps) {
@@ -26,173 +15,114 @@ export function DownloadItem({ download, onCancel }: DownloadItemProps) {
   const displayTitle = filename || url;
   const isAudio = preset?.startsWith('audio');
 
-  // --- Theme Logic ---
-  
-  // Base Themes
-  const themes: Record<string, Theme> = {
-    video: {
-        icon: FileVideo,
-        text: 'text-synth-cyan',
-        border: 'border-synth-cyan',
-        bg: 'bg-synth-cyan/10',
-        shadow: 'shadow-neon-cyan',
-        progress: 'cyan',
-        label: 'VIDEO'
-    },
-    audio: {
-        icon: Headphones,
-        text: 'text-synth-pink',
-        border: 'border-synth-pink',
-        bg: 'bg-synth-pink/10',
-        shadow: 'shadow-neon-pink',
-        progress: 'pink',
-        label: 'AUDIO'
-    },
-    completed: {
-        icon: CheckCircle2,
-        text: 'text-green-400',
-        border: 'border-green-500',
-        bg: 'bg-green-500/10',
-        shadow: 'shadow-none',
-        progress: 'green',
-        label: 'DONE'
-    },
-    error: {
-        icon: AlertTriangle,
-        text: 'text-red-500',
-        border: 'border-red-500',
-        bg: 'bg-red-500/10',
-        shadow: 'shadow-none',
-        progress: 'red',
-        label: 'ERROR'
-    },
-    cancelled: {
-        icon: X,
-        text: 'text-gray-500',
-        border: 'border-gray-600',
-        bg: 'bg-gray-800',
-        shadow: 'shadow-none',
-        progress: 'cyan',
-        label: 'CANCELLED'
-    }
+  const getIcon = () => {
+      if (status === 'error') return <AlertCircle className="h-5 w-5 text-theme-red" />;
+      if (status === 'completed') return <CheckCircle2 className="h-5 w-5 text-theme-cyan" />;
+      if (status === 'cancelled') return <X className="h-5 w-5 text-zinc-500" />;
+      
+      // Use different accents for Audio vs Video to match the form
+      return isAudio 
+        ? <Headphones className="h-5 w-5 text-theme-red animate-pulse" /> 
+        : <MonitorPlay className="h-5 w-5 text-theme-cyan animate-pulse" />;
   };
 
-  // Select Theme based on Status > Type
-  // We explicitly type this as Theme so it can accept any variant
-  let currentTheme: Theme = isAudio ? themes.audio : themes.video;
-
-  if (status === 'completed') currentTheme = themes.completed;
-  if (status === 'error') currentTheme = themes.error;
-  if (status === 'cancelled') currentTheme = themes.cancelled;
-
-  const Icon = currentTheme.icon;
-  
-  // Determine badge text (e.g. "MP3" or "VIDEO")
-  let badgeText = currentTheme.label;
+  let badgeText = isAudio ? 'AUDIO' : 'VIDEO';
   if (status === 'downloading' || status === 'pending') {
       if (preset) {
-          // Parse preset like "audio_mp3" -> "MP3"
           const parts = preset.split('_');
           if (parts.length > 1 && parts[1] !== 'best') {
              badgeText = parts[1].toUpperCase();
           }
       }
   }
+  
+  const isActive = status === 'downloading';
+  const isError = status === 'error';
 
   return (
     <div className={twMerge(
-        "group animate-slide-in relative bg-synth-dark border rounded-lg p-4 overflow-hidden transition-all duration-300 hover:shadow-lg hover:bg-synth-navy",
-        currentTheme.border,
-        // Subtle glow on hover based on type
-        status === 'downloading' && isAudio ? "hover:shadow-neon-pink" : "",
-        status === 'downloading' && !isAudio ? "hover:shadow-neon-cyan" : ""
+        "group animate-fade-in relative bg-surface border border-border rounded-lg p-5 transition-all duration-300",
+        isActive && "border-theme-cyan/30 shadow-[0_0_20px_-10px_rgba(0,242,234,0.1)]",
+        isError && "border-theme-red/30"
     )}>
       
-      <div className="flex items-start gap-4 relative z-10">
+      <div className="flex items-start gap-5">
         {/* Icon Box */}
         <div className={twMerge(
-            "h-12 w-12 flex-shrink-0 rounded-lg flex items-center justify-center border transition-all duration-500",
-            currentTheme.bg,
-            currentTheme.border,
-            currentTheme.text,
-            status === 'downloading' ? currentTheme.shadow : "",
-            status === 'downloading' ? "animate-pulse" : ""
+            "h-12 w-12 flex-shrink-0 rounded-lg flex items-center justify-center border",
+            isActive && isAudio && "bg-theme-red/5 border-theme-red/20",
+            isActive && !isAudio && "bg-theme-cyan/5 border-theme-cyan/20",
+            !isActive && "bg-zinc-900 border-zinc-800"
         )}>
-          <Icon className="h-6 w-6" />
+          {getIcon()}
         </div>
         
-        <div className="flex-grow min-w-0 space-y-2">
+        <div className="flex-grow min-w-0 space-y-3">
             {/* Title Row */}
-            <div className="flex justify-between items-start gap-2">
-                 <p className="text-sm font-medium truncate text-white font-mono tracking-tight flex-grow" title={displayTitle}>
-                    {displayTitle}
-                 </p>
-                 
-                 {/* Percentage Badge */}
-                 {(status === 'downloading' || status === 'pending') && (
-                    <span className={twMerge("text-xs font-mono px-2 py-0.5 rounded bg-synth-navy border min-w-[3rem] text-center", currentTheme.text, currentTheme.border)}>
-                        {progress.toFixed(0)}%
-                    </span>
-                 )}
-                 
-                 {/* Status Badge for non-active states */}
-                 {(status === 'completed' || status === 'error' || status === 'cancelled') && (
-                     <span className={twMerge("text-xs font-bold font-mono px-2 py-0.5 rounded bg-synth-navy border", currentTheme.text, currentTheme.border)}>
-                        {currentTheme.label}
-                     </span>
-                 )}
+            <div className="flex justify-between items-start gap-4">
+                 <div className="space-y-1 min-w-0">
+                    <p className={twMerge(
+                        "text-sm font-semibold truncate transition-colors",
+                        isActive ? "text-zinc-100" : "text-zinc-400"
+                    )} title={displayTitle}>
+                        {displayTitle}
+                    </p>
+                    <div className="flex items-center gap-2 text-[10px] uppercase tracking-wider font-bold">
+                        <span className={twMerge(
+                            "px-1.5 py-0.5 rounded border",
+                            isAudio ? "border-theme-red/30 text-theme-red bg-theme-red/5" : "border-theme-cyan/30 text-theme-cyan bg-theme-cyan/5"
+                        )}>{badgeText}</span>
+                        
+                        <span className="text-zinc-500 flex items-center gap-1">
+                            {isActive && <Activity className="h-3 w-3" />}
+                            {phase || (status === 'pending' ? 'Queued' : status)}
+                        </span>
+                    </div>
+                 </div>
+
+                 {/* Percentage / Status */}
+                 <div className="flex flex-col items-end gap-1">
+                    {(status === 'downloading' || status === 'pending') && (
+                         <span className="text-lg font-bold text-zinc-100 tabular-nums">{progress.toFixed(0)}<span className="text-sm text-zinc-600">%</span></span>
+                    )}
+                 </div>
             </div>
             
-            {/* Progress Bar */}
-            <Progress value={progress} variant={currentTheme.progress} />
-            
-            {/* Meta Data Grid */}
-            <div className="grid grid-cols-2 gap-2 text-xs font-mono text-synth-light/60 mt-2">
+            {/* Progress Bar & Error/Stats */}
+            <div className="space-y-3">
+                {(status === 'downloading' || status === 'pending') && (
+                     <Progress value={progress} variant={isError ? 'error' : 'default'} />
+                )}
                 
-                {/* Left: Type/Phase */}
-                <div className="flex items-center gap-1.5 truncate">
-                   {!['completed', 'error', 'cancelled'].includes(status) && (
-                       <span className={twMerge("font-bold px-1.5 rounded text-[10px] border", currentTheme.text, currentTheme.border)}>
-                           {badgeText}
-                       </span>
-                   )}
-                   <span className={currentTheme.text}>
-                     {status === 'downloading' ? (phase || 'Processing...') : ''}
-                     {status === 'completed' && <span className="text-green-400">Saved to disk</span>}
-                   </span>
-                </div>
+                {status === 'error' && (
+                    <div className="text-xs text-theme-red bg-theme-red/10 border border-theme-red/20 p-3 rounded font-mono">
+                        {error}
+                    </div>
+                )}
 
-                {/* Right: Stats */}
+                {/* Active Stats */}
                 {(status === 'downloading') && (
-                    <div className="flex items-center justify-end gap-3">
-                        <span title="Speed" className="flex items-center gap-1 text-white/80">
-                            ⚡ {speed}
+                    <div className="flex items-center justify-between text-xs text-zinc-500 font-mono">
+                        <span title="Speed" className="text-zinc-400">
+                           {speed}
                         </span>
-                        <span title="ETA" className="flex items-center gap-1 text-white/80">
+                        <span title="ETA" className="flex items-center gap-1 text-zinc-400">
                             <Clock className="h-3 w-3" /> {eta}
                         </span>
                     </div>
                 )}
-                 {status === 'error' && (
-                    <span className="col-span-2 text-red-400 truncate font-bold" title={error}>{error}</span>
-                )}
-                 {status === 'completed' && (
-                     <div className="flex items-center justify-end">
-                        <span className="text-green-400/70">Ready</span>
-                     </div>
-                 )}
             </div>
         </div>
 
         {/* Actions */}
-        <div className="flex flex-col justify-center">
+        <div className="flex flex-col justify-center pl-2">
           {(status === 'downloading' || status === 'pending') && (
              <Button 
                 variant="ghost" 
                 size="icon" 
                 onClick={() => onCancel(jobId)} 
-                className="text-gray-500 hover:text-red-500 hover:bg-red-500/10 h-8 w-8"
-                title="Cancel Download"
+                className="h-8 w-8 text-zinc-600 hover:text-theme-red hover:bg-theme-red/10 transition-colors"
+                title="Cancel"
              >
                 <X className="h-4 w-4" />
               </Button>

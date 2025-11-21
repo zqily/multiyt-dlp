@@ -2,35 +2,39 @@
 @tailwind components;
 @tailwind utilities;
 
-body {
-  @apply bg-synth-navy text-synth-light overflow-hidden;
-  background-image: 
-    linear-gradient(rgba(8, 217, 214, 0.05) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(8, 217, 214, 0.05) 1px, transparent 1px);
-  background-size: 30px 30px;
+:root {
+  /* Darker base for high contrast */
+  --background: 240 10% 3.9%;
+  --foreground: 0 0% 98%;
+  
+  /* Custom Neon Colors derived from Icon */
+  --neon-cyan: 176 100% 47%; /* #00f2ea */
+  --neon-red: 341 100% 50%;  /* #ff0050 */
 }
 
-/* Custom Scrollbar for that retro feel */
+body {
+  @apply bg-[#050505] text-zinc-200 antialiased font-sans selection:bg-[hsl(var(--neon-cyan))] selection:text-black;
+}
+
+/* Custom Scrollbar */
 ::-webkit-scrollbar {
-  width: 8px;
+  width: 5px;
 }
 
 ::-webkit-scrollbar-track {
-  @apply bg-synth-dark;
+  @apply bg-zinc-950;
 }
 
 ::-webkit-scrollbar-thumb {
-  @apply bg-synth-cyan/30 rounded-full hover:bg-synth-cyan/60 transition-colors;
+  @apply bg-zinc-800 rounded-full hover:bg-[hsl(var(--neon-cyan))] transition-colors duration-300;
 }
 
-/* Scanline effect overlay class */
-.scanlines {
-  background: linear-gradient(
-    to bottom,
-    rgba(255,255,255,0),
-    rgba(255,255,255,0) 50%,
-    rgba(0,0,0,0.1) 50%,
-    rgba(0,0,0,0.1)
-  );
-  background-size: 100% 4px;
+/* Utilities for Glow effects */
+@layer utilities {
+  .shadow-glow-cyan {
+    box-shadow: 0 0 15px -3px hsla(var(--neon-cyan), 0.3);
+  }
+  .shadow-glow-red {
+    box-shadow: 0 0 15px -3px hsla(var(--neon-red), 0.3);
+  }
 }

@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { Button } from './ui/Button';
-import { Card, CardContent, CardHeader, CardTitle } from './ui/Card';
-import { Download, FolderOpen, FileVideo, Music, Radio } from 'lucide-react';
+import { Card, CardContent } from './ui/Card';
+import { Download, FolderOpen, Link2, MonitorPlay, Headphones } from 'lucide-react';
 import { selectDirectory } from '@/api/invoke';
 import { DownloadFormatPreset } from '@/types';
 import { twMerge } from 'tailwind-merge';
@@ -33,23 +33,29 @@ interface ModeButtonProps {
     icon: React.ElementType;
     label: string;
     onClick: (mode: DownloadMode) => void;
+    accentColor: string;
 }
 
 const ModeButton: React.FC<ModeButtonProps> = ({ mode, currentMode, icon: Icon, label, onClick }) => {
     const isActive = mode === currentMode;
+    // We use dynamic classes based on mode for that specific icon color pop
+    const activeClass = mode === 'video' 
+        ? 'bg-theme-cyan/10 text-theme-cyan border-theme-cyan/50 shadow-glow-cyan' 
+        : 'bg-theme-red/10 text-theme-red border-theme-red/50 shadow-glow-red';
+
     return (
         <button
             type="button"
             onClick={() => onClick(mode)}
-            title={label}
             className={twMerge(
-                'flex items-center justify-center p-3 rounded-lg transition-all duration-300 border',
+                'flex flex-1 items-center justify-center gap-2 py-2.5 text-xs uppercase tracking-wider font-bold rounded-md transition-all border',
                 isActive
-                    ? 'bg-synth-cyan text-synth-navy border-synth-cyan shadow-neon-cyan'
-                    : 'bg-synth-navy border-synth-cyan/20 text-synth-cyan/50 hover:text-synth-cyan hover:border-synth-cyan/50 hover:bg-synth-cyan/5'
+                    ? activeClass
+                    : 'bg-zinc-900/50 border-zinc-800 text-zinc-500 hover:text-zinc-300 hover:border-zinc-700'
             )}
         >
-            <Icon className="h-5 w-5" />
+            <Icon className="h-4 w-4" />
+            {label}
         </button>
     );
 };
@@ -92,89 +98,99 @@ export function DownloadForm({ onDownload }: DownloadFormProps) {
   const filteredPresets = formatPresets.filter(p => p.mode === mode);
 
   return (
-    <Card className="border-synth-cyan/30 bg-synth-dark/50">
-      <CardHeader>
-        <CardTitle className="flex items-center gap-2">
-            <Radio className="h-5 w-5 animate-pulse text-synth-pink" />
-            Input Sequence
-        </CardTitle>
-      </CardHeader>
-      <CardContent>
-        <form onSubmit={handleSubmit} className="flex flex-col gap-5">
+    <Card className="bg-transparent border-0 shadow-none p-0">
+      <CardContent className="p-0">
+        <form onSubmit={handleSubmit} className="flex flex-col gap-6">
           
           {/* URL Input */}
-          <div className="relative group">
-            <div className="absolute -inset-0.5 bg-gradient-to-r from-synth-cyan to-synth-pink rounded-lg blur opacity-20 group-hover:opacity-50 transition duration-200"></div>
-            <input
-                type="text"
-                value={url}
-                onChange={(e) => setUrl(e.target.value)}
-                placeholder="Paste URL here..."
-                className="relative w-full bg-synth-navy border border-synth-cyan/30 rounded-lg px-4 py-3 text-sm font-mono text-synth-cyan placeholder-synth-cyan/30 focus:outline-none focus:border-synth-cyan focus:shadow-neon-cyan transition-all"
-            />
+          <div className="space-y-2">
+            <label className="text-[11px] uppercase tracking-wider font-bold text-zinc-500 ml-1">Target URL</label>
+            <div className="relative group">
+                <div className="absolute inset-0 bg-theme-cyan/20 blur-md rounded-lg opacity-0 group-focus-within:opacity-100 transition-opacity duration-500"></div>
+                <Link2 className="absolute left-3 top-3 h-4 w-4 text-zinc-500 group-focus-within:text-theme-cyan transition-colors" />
+                <input
+                    type="text"
+                    value={url}
+                    onChange={(e) => setUrl(e.target.value)}
+                    placeholder="https://youtube.com/watch?v=..."
+                    className="relative w-full bg-surfaceHighlight border border-border rounded-md pl-10 pr-4 py-2.5 text-sm text-zinc-100 placeholder-zinc-700 focus:outline-none focus:ring-1 focus:ring-theme-cyan focus:border-theme-cyan transition-all"
+                />
+            </div>
           </div>
           
-          {/* Download Path */}
-          <div className="flex gap-2 items-center">
-             <div className="relative flex-grow">
-                 <input
-                    type="text"
-                    value={downloadPath}
-                    readOnly
-                    placeholder="Default Downloads"
-                    className="w-full bg-synth-dark border border-synth-cyan/20 rounded-lg px-3 py-2 text-xs font-mono text-synth-light/50 cursor-not-allowed focus:outline-none"
-                 />
-             </div>
-             <Button 
-                type="button" 
-                variant="secondary" 
-                onClick={handleSelectDirectory} 
-                className="h-full aspect-square p-0 flex items-center justify-center"
-             >
-                <FolderOpen className="h-4 w-4" />
-             </Button>
-          </div>
-
-          {/* Controls */}
-          <div className="flex gap-3 items-stretch h-12">
-            <div className="flex gap-2">
-                <ModeButton mode="video" currentMode={mode} onClick={handleModeChange} icon={FileVideo} label="Video" />
-                <ModeButton mode="audio" currentMode={mode} onClick={handleModeChange} icon={Music} label="Audio" />
-            </div>
-
-            <div className="relative flex-grow group">
-                 <div className="absolute inset-y-0 right-0 flex items-center px-2 pointer-events-none text-synth-cyan z-10 bg-synth-navy/80 rounded-r-lg border-l border-synth-cyan/20">
-                    <span className="text-[10px] font-bold">&#9660;</span>
-                </div>
-                <select
+          <div className="grid grid-cols-1 gap-5">
+              
+              {/* Mode & Format */}
+              <div className="space-y-2">
+                 <label className="text-[11px] uppercase tracking-wider font-bold text-zinc-500 ml-1">Format</label>
+                 <div className="flex gap-2 mb-3">
+                    <ModeButton 
+                        mode="video" 
+                        currentMode={mode} 
+                        onClick={handleModeChange} 
+                        icon={MonitorPlay} 
+                        label="Video" 
+                        accentColor="cyan"
+                    />
+                    <ModeButton 
+                        mode="audio" 
+                        currentMode={mode} 
+                        onClick={handleModeChange} 
+                        icon={Headphones} 
+                        label="Audio" 
+                        accentColor="red"
+                    />
+                 </div>
+                 
+                 <select
                     value={selectedFormat}
                     onChange={(e) => setSelectedFormat(e.target.value as DownloadFormatPreset)}
-                    className="w-full h-full bg-synth-navy border border-synth-cyan/30 rounded-lg pl-3 pr-8 text-sm font-mono text-synth-cyan focus:outline-none focus:ring-1 focus:ring-synth-cyan appearance-none hover:bg-synth-cyan/5 cursor-pointer transition-colors"
-                >
+                    className="w-full bg-surfaceHighlight border border-border rounded-md px-3 py-2.5 text-sm text-zinc-300 focus:outline-none focus:ring-1 focus:ring-theme-cyan/50 focus:border-theme-cyan/50"
+                 >
                     {filteredPresets.map(p => (
-                        <option key={p.value} value={p.value} className="bg-synth-navy text-white">
+                        <option key={p.value} value={p.value}>
                             {p.label}
                         </option>
                     ))}
-                </select>
-            </div>
+                 </select>
+              </div>
+
+              {/* Directory */}
+              <div className="space-y-2">
+                  <label className="text-[11px] uppercase tracking-wider font-bold text-zinc-500 ml-1">Save Location</label>
+                  <div className="flex gap-2">
+                     <input
+                        type="text"
+                        value={downloadPath}
+                        readOnly
+                        placeholder="Downloads Folder"
+                        className="flex-grow bg-surfaceHighlight border border-border rounded-md px-3 py-2.5 text-sm text-zinc-500 cursor-not-allowed"
+                     />
+                     <Button 
+                        type="button" 
+                        variant="secondary" 
+                        onClick={handleSelectDirectory} 
+                        className="px-4 border-zinc-700 hover:border-zinc-500"
+                        title="Choose Folder"
+                     >
+                        <FolderOpen className="h-4 w-4" />
+                     </Button>
+                  </div>
+              </div>
           </div>
 
-          <Button 
-            type="submit" 
-            disabled={!isValidUrl} 
-            className={twMerge(
-                "w-full h-12 text-base tracking-wider uppercase relative overflow-hidden group",
-                !isValidUrl ? "opacity-50" : "hover:shadow-[0_0_20px_rgba(8,217,214,0.4)]"
-            )}
-            variant={isValidUrl ? 'default' : 'secondary'}
-          >
-            <span className="relative z-10 flex items-center">
-                <Download className={twMerge("mr-2 h-5 w-5", isValidUrl && "animate-bounce")} />
+          <div className="pt-2">
+            <Button 
+                type="submit" 
+                variant="default"
+                disabled={!isValidUrl} 
+                className="w-full h-12 text-base uppercase tracking-wide font-black shadow-lg shadow-theme-cyan/20"
+            >
+                <Download className="mr-2 h-5 w-5" />
                 Initialize Download
-            </span>
-            {isValidUrl && <div className="absolute inset-0 bg-white/20 skew-x-12 -translate-x-full group-hover:animate-[shimmer_1s_infinite]"></div>}
-          </Button>
+            </Button>
+          </div>
+
         </form>
       </CardContent>
     </Card>
