@@ -1,13 +1,21 @@
+// src/components/DownloadForm.tsx
+
 import React, { useState } from 'react';
 import { Button } from './ui/Button';
 import { Card, CardContent } from './ui/Card';
-import { Download, FolderOpen, Link2, MonitorPlay, Headphones } from 'lucide-react';
+import { Download, FolderOpen, Link2, MonitorPlay, Headphones, FileText, Image as ImageIcon } from 'lucide-react';
 import { selectDirectory } from '@/api/invoke';
 import { DownloadFormatPreset } from '@/types';
 import { twMerge } from 'tailwind-merge';
 
 interface DownloadFormProps {
-  onDownload: (url: string, downloadPath?: string, formatPreset?: DownloadFormatPreset) => void;
+  onDownload: (
+      url: string, 
+      downloadPath?: string, 
+      formatPreset?: DownloadFormatPreset, 
+      embedMeta?: boolean,
+      embedThumbnail?: boolean
+    ) => void;
 }
 
 type DownloadMode = 'video' | 'audio';
@@ -38,7 +46,6 @@ interface ModeButtonProps {
 
 const ModeButton: React.FC<ModeButtonProps> = ({ mode, currentMode, icon: Icon, label, onClick }) => {
     const isActive = mode === currentMode;
-    // We use dynamic classes based on mode for that specific icon color pop
     const activeClass = mode === 'video' 
         ? 'bg-theme-cyan/10 text-theme-cyan border-theme-cyan/50 shadow-glow-cyan' 
         : 'bg-theme-red/10 text-theme-red border-theme-red/50 shadow-glow-red';
@@ -65,11 +72,14 @@ export function DownloadForm({ onDownload }: DownloadFormProps) {
   const [downloadPath, setDownloadPath] = useState<string>('');
   const [mode, setMode] = useState<DownloadMode>('video');
   const [selectedFormat, setSelectedFormat] = useState<DownloadFormatPreset>('best');
+  
+  const [embedMetadata, setEmbedMetadata] = useState<boolean>(false);
+  const [embedThumbnail, setEmbedThumbnail] = useState<boolean>(false);
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (url.trim()) {
-      onDownload(url, downloadPath || undefined, selectedFormat);
+      onDownload(url, downloadPath || undefined, selectedFormat, embedMetadata, embedThumbnail);
       setUrl('');
     }
   };
@@ -122,7 +132,7 @@ export function DownloadForm({ onDownload }: DownloadFormProps) {
               
               {/* Mode & Format */}
               <div className="space-y-2">
-                 <label className="text-[11px] uppercase tracking-wider font-bold text-zinc-500 ml-1">Format</label>
+                 <label className="text-[11px] uppercase tracking-wider font-bold text-zinc-500 ml-1">Configuration</label>
                  <div className="flex gap-2 mb-3">
                     <ModeButton 
                         mode="video" 
@@ -142,17 +152,52 @@ export function DownloadForm({ onDownload }: DownloadFormProps) {
                     />
                  </div>
                  
-                 <select
-                    value={selectedFormat}
-                    onChange={(e) => setSelectedFormat(e.target.value as DownloadFormatPreset)}
-                    className="w-full bg-surfaceHighlight border border-border rounded-md px-3 py-2.5 text-sm text-zinc-300 focus:outline-none focus:ring-1 focus:ring-theme-cyan/50 focus:border-theme-cyan/50"
-                 >
-                    {filteredPresets.map(p => (
-                        <option key={p.value} value={p.value}>
-                            {p.label}
-                        </option>
-                    ))}
-                 </select>
+                 <div className="space-y-3">
+                     <select
+                        value={selectedFormat}
+                        onChange={(e) => setSelectedFormat(e.target.value as DownloadFormatPreset)}
+                        className="w-full bg-surfaceHighlight border border-border rounded-md px-3 py-2.5 text-sm text-zinc-300 focus:outline-none focus:ring-1 focus:ring-theme-cyan/50 focus:border-theme-cyan/50"
+                     >
+                        {filteredPresets.map(p => (
+                            <option key={p.value} value={p.value}>
+                                {p.label}
+                            </option>
+                        ))}
+                     </select>
+
+                     {/* Post Processing Options */}
+                     <div className="flex gap-2">
+                         <button
+                            type="button"
+                            onClick={() => setEmbedMetadata(!embedMetadata)}
+                            className={twMerge(
+                                "flex-1 flex items-center justify-center gap-2 px-2 py-2.5 rounded-md border transition-all text-xs font-medium",
+                                embedMetadata 
+                                    ? "bg-zinc-800 border-theme-cyan/50 text-theme-cyan"
+                                    : "bg-surfaceHighlight border-border text-zinc-500 hover:text-zinc-300"
+                            )}
+                            title="Embed Metadata (Tags)"
+                         >
+                            <FileText className="h-3.5 w-3.5" />
+                            Metadata
+                         </button>
+
+                         <button
+                            type="button"
+                            onClick={() => setEmbedThumbnail(!embedThumbnail)}
+                            className={twMerge(
+                                "flex-1 flex items-center justify-center gap-2 px-2 py-2.5 rounded-md border transition-all text-xs font-medium",
+                                embedThumbnail 
+                                    ? "bg-zinc-800 border-theme-cyan/50 text-theme-cyan"
+                                    : "bg-surfaceHighlight border-border text-zinc-500 hover:text-zinc-300"
+                            )}
+                            title="Embed Thumbnail (Cover Art)"
+                         >
+                            <ImageIcon className="h-3.5 w-3.5" />
+                            Thumbnail
+                         </button>
+                     </div>
+                 </div>
               </div>
 
               {/* Directory */}

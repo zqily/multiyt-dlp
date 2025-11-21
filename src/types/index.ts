@@ -1,7 +1,8 @@
+// src/types/index.ts
+
 // --- Data Contracts ---
 
 // This mirrors the `AppError` enum in the Rust backend.
-// The keys match the enum variants. The value is the error message.
 export type AppError = {
   YtDlpNotFound?: string;
   IoError?: string;
@@ -12,11 +13,11 @@ export type AppError = {
 
 // This mirrors the `DownloadFormatPreset` enum in the Rust backend.
 export type DownloadFormatPreset = 
-  | 'best' // Video + Audio (Default)
+  | 'best' 
   | 'best_mp4' 
   | 'best_mkv'
   | 'best_webm'
-  | 'audio_best' // Audio Only (Default)
+  | 'audio_best' 
   | 'audio_mp3'
   | 'audio_flac'
   | 'audio_m4a';
@@ -29,8 +30,8 @@ export interface DownloadProgressPayload {
   percentage: number;
   speed: string;
   eta: string;
-  filename?: string; // The clean title of the video
-  phase?: string;    // e.g., "Downloading Video", "Downloading Audio", "Merging"
+  filename?: string; 
+  phase?: string;    
 }
 
 export interface DownloadCompletePayload {
@@ -58,5 +59,7 @@ export interface Download {
   error?: string;
   filename?: string;
   phase?: string;
-  preset?: DownloadFormatPreset; // Added to track the type of download
+  preset?: DownloadFormatPreset; 
+  embedMetadata?: boolean; // Changed from embedMeta
+  embedThumbnail?: boolean; // Added
 }

@@ -1,12 +1,20 @@
+// src/App.tsx
+
 import { DownloadForm } from './components/DownloadForm';
 import { DownloadQueue } from './components/DownloadQueue';
 import { EnvironmentGate } from './components/EnvironmentGate';
 import { useDownloadManager } from './hooks/useDownloadManager';
 import { Layout } from './components/Layout';
-import { List } from 'lucide-react';
+import { Activity, CheckCircle2, AlertCircle, List, Database } from 'lucide-react';
 
 function App() {
   const { downloads, startDownload, cancelDownload } = useDownloadManager();
+
+  // Calculate Stats
+  const total = downloads.size;
+  const active = Array.from(downloads.values()).filter(d => d.status === 'downloading' || d.status === 'pending').length;
+  const completed = Array.from(downloads.values()).filter(d => d.status === 'completed').length;
+  const failed = Array.from(downloads.values()).filter(d => d.status === 'error').length;
 
   return (
     <EnvironmentGate>
@@ -16,21 +24,57 @@ function App() {
         }
         MainContent={
           <>
-            <div className="flex items-center justify-between mb-6">
-                <div className="flex items-center gap-2">
-                    <div className="p-2 rounded bg-zinc-900 border border-zinc-800">
-                         <List className="text-zinc-400 h-5 w-5" />
+            {/* Executive Summary Header */}
+            <div className="flex items-center justify-between mb-6 bg-zinc-900/40 border border-zinc-800 rounded-lg p-4">
+                <div className="flex items-center gap-4">
+                    <div className="p-2 rounded-md bg-zinc-900 border border-zinc-800">
+                         <List className="text-zinc-400 h-6 w-6" />
                     </div>
-                    <h2 className="text-xl font-semibold text-zinc-100">
-                        Queue
-                    </h2>
+                    <div>
+                        <h2 className="text-lg font-semibold text-zinc-100 leading-tight">
+                            Download Queue
+                        </h2>
+                        <div className="text-xs text-zinc-500 font-mono mt-1">
+                            SESSION ID: {Math.floor(Date.now() / 1000).toString(16).toUpperCase()}
+                        </div>
+                    </div>
                 </div>
-                {downloads.size > 0 && (
-                    <span className="text-xs font-medium text-zinc-500 bg-zinc-900 px-2.5 py-1 rounded-full border border-zinc-800">
-                        {downloads.size} Active
-                    </span>
-                )}
+
+                <div className="flex items-center gap-6 text-sm">
+                     <div className="flex flex-col items-end">
+                        <span className="text-xs text-zinc-500 uppercase tracking-wider font-bold">Total</span>
+                        <div className="flex items-center gap-1.5 text-zinc-200 font-mono">
+                            <Database className="h-3 w-3 text-zinc-400" />
+                            {total}
+                        </div>
+                     </div>
+                     <div className="w-px h-8 bg-zinc-800" />
+                     <div className="flex flex-col items-end">
+                        <span className="text-xs text-zinc-500 uppercase tracking-wider font-bold">Active</span>
+                        <div className="flex items-center gap-1.5 text-zinc-200 font-mono">
+                            <Activity className="h-3 w-3 text-theme-cyan" />
+                            {active}
+                        </div>
+                     </div>
+                     <div className="w-px h-8 bg-zinc-800" />
+                     <div className="flex flex-col items-end">
+                        <span className="text-xs text-zinc-500 uppercase tracking-wider font-bold">Done</span>
+                        <div className="flex items-center gap-1.5 text-zinc-200 font-mono">
+                            <CheckCircle2 className="h-3 w-3 text-emerald-500" />
+                            {completed}
+                        </div>
+                     </div>
+                     <div className="w-px h-8 bg-zinc-800" />
+                     <div className="flex flex-col items-end">
+                        <span className="text-xs text-zinc-500 uppercase tracking-wider font-bold">Failed</span>
+                        <div className="flex items-center gap-1.5 text-zinc-200 font-mono">
+                            <AlertCircle className="h-3 w-3 text-theme-red" />
+                            {failed}
+                        </div>
+                     </div>
+                </div>
             </div>
+
             <DownloadQueue downloads={downloads} onCancel={cancelDownload} />
           </>
         }

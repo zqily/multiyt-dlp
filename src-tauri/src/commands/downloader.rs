@@ -1,3 +1,5 @@
+// src-tauri/src/commands/downloader.rs
+
 use std::sync::{Arc, Mutex};
 use tauri::{AppHandle, State};
 use uuid::Uuid;
@@ -7,14 +9,16 @@ use crate::core::{
     manager::{JobManager, JobStatus},
     process::run_download_process,
 };
-use crate::models::{Job, DownloadFormatPreset}; // Import DownloadFormatPreset
+use crate::models::{Job, DownloadFormatPreset};
 
 // Command to start a download
 #[tauri::command]
 pub async fn start_download(
     url: String,
     download_path: Option<String>,
-    format_preset: DownloadFormatPreset, // New argument
+    format_preset: DownloadFormatPreset,
+    embed_metadata: bool,
+    embed_thumbnail: bool, // New argument
     app_handle: AppHandle,
     manager: State<'_, Arc<Mutex<JobManager>>>,
 ) -> Result<Uuid, AppError> {
@@ -36,7 +40,9 @@ pub async fn start_download(
             job_id, 
             url, 
             download_path, 
-            format_preset, // Pass the new argument
+            format_preset, 
+            embed_metadata,
+            embed_thumbnail, // Pass to process
             app_handle, 
             manager_clone
         ).await;
@@ -57,6 +63,8 @@ pub fn cancel_download(
         // Platform-specific process killing
         #[cfg(not(windows))]
         {
+            use nix::sys::signal::{self, Signal};
+            use nix::unistd::Pid;
             let pid_to_kill = Pid::from_raw(pid as i32);
             if let Err(e) = signal::kill(pid_to_kill, Signal::SIGINT) {
                 return Err(AppError::ProcessKillFailed(format!(

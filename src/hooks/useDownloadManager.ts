@@ -1,3 +1,5 @@
+// src/hooks/useDownloadManager.ts
+
 import { useState, useEffect, useCallback } from 'react';
 import { listen } from '@tauri-apps/api/event';
 import { Download, DownloadCompletePayload, DownloadErrorPayload, DownloadProgressPayload, DownloadFormatPreset } from '@/types';
@@ -52,10 +54,15 @@ export function useDownloadManager() {
     };
   }, []);
 
-  const startDownload = useCallback(async (url: string, downloadPath?: string, formatPreset: DownloadFormatPreset = 'best') => {
+  const startDownload = useCallback(async (
+    url: string, 
+    downloadPath?: string, 
+    formatPreset: DownloadFormatPreset = 'best',
+    embedMetadata: boolean = false,
+    embedThumbnail: boolean = false
+  ) => {
     try {
-      // Pass the new formatPreset argument
-      const jobId = await apiStartDownload(url, downloadPath, formatPreset); 
+      const jobId = await apiStartDownload(url, downloadPath, formatPreset, embedMetadata, embedThumbnail); 
       setDownloads((prev) => {
         const newMap = new Map(prev);
         newMap.set(jobId, {
@@ -63,7 +70,9 @@ export function useDownloadManager() {
           url,
           status: 'pending',
           progress: 0,
-          preset: formatPreset, // Save the preset here
+          preset: formatPreset,
+          embedMetadata,
+          embedThumbnail
         });
         return newMap;
       });
