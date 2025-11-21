@@ -1,4 +1,32 @@
-// --- Data Contracts ---
+// --- Config Types ---
+
+export interface GeneralConfig {
+  download_path: string | null;
+  filename_template: string;
+  template_blocks_json: string | null;
+}
+
+export interface PreferenceConfig {
+  mode: string;
+  format_preset: string;
+  embed_metadata: boolean;
+  embed_thumbnail: boolean;
+}
+
+export interface WindowConfig {
+  width: number;
+  height: number;
+  x: number;
+  y: number;
+}
+
+export interface AppConfig {
+  general: GeneralConfig;
+  preferences: PreferenceConfig;
+  window: WindowConfig;
+}
+
+// ... (Keep existing AppDependencies, AppError, etc.) ...
 
 export interface AppDependencies {
   yt_dlp: boolean;
@@ -6,7 +34,6 @@ export interface AppDependencies {
   js_runtime: boolean;
 }
 
-// This mirrors the `AppError` enum in the Rust backend.
 export type AppError = {
   IoError?: string;
   ProcessFailed?: { exit_code: number; stderr: string };
@@ -14,7 +41,6 @@ export type AppError = {
   JobAlreadyExists?: string;
 };
 
-// This mirrors the `DownloadFormatPreset` enum in the Rust backend.
 export type DownloadFormatPreset = 
   | 'best' 
   | 'best_mp4' 
@@ -24,9 +50,6 @@ export type DownloadFormatPreset =
   | 'audio_mp3'
   | 'audio_flac'
   | 'audio_m4a';
-
-
-// --- Event Payloads ---
 
 export interface DownloadProgressPayload {
   jobId: string;
@@ -47,8 +70,6 @@ export interface DownloadErrorPayload {
   error: string;
 }
 
-// --- Frontend State ---
-
 export type DownloadStatus = 'pending' | 'downloading' | 'completed' | 'error' | 'cancelled';
 
 export interface Download {
@@ -66,8 +87,6 @@ export interface Download {
   embedMetadata?: boolean; 
   embedThumbnail?: boolean;
 }
-
-// --- Settings Types ---
 
 export type TemplateBlockType = 'variable' | 'separator' | 'text';
 

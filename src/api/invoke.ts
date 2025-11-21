@@ -1,6 +1,8 @@
 import { invoke } from "@tauri-apps/api/tauri";
 import { open } from "@tauri-apps/api/dialog";
-import { DownloadFormatPreset, AppDependencies } from '@/types';
+import { DownloadFormatPreset, AppDependencies, AppConfig, GeneralConfig, PreferenceConfig } from '@/types';
+
+// ... (Existing functions checkDependencies, openExternalLink) ...
 
 export async function checkDependencies(): Promise<AppDependencies> {
     return await invoke("check_dependencies");
@@ -9,6 +11,22 @@ export async function checkDependencies(): Promise<AppDependencies> {
 export async function openExternalLink(url: string): Promise<void> {
   return await invoke("open_external_link", { url });
 }
+
+// --- Config API ---
+
+export async function getAppConfig(): Promise<AppConfig> {
+    return await invoke("get_app_config");
+}
+
+export async function saveGeneralConfig(config: GeneralConfig): Promise<void> {
+    return await invoke("save_general_config", { config });
+}
+
+export async function savePreferenceConfig(config: PreferenceConfig): Promise<void> {
+    return await invoke("save_preference_config", { config });
+}
+
+// --- Downloader API ---
 
 export async function startDownload(
   url: string, 

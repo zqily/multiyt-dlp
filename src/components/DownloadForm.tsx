@@ -68,33 +68,43 @@ const ModeButton: React.FC<ModeButtonProps> = ({ mode, currentMode, icon: Icon, 
 };
 
 export function DownloadForm({ onDownload }: DownloadFormProps) {
-  const { getTemplateString, isJsRuntimeMissing } = useAppContext();
+  const { 
+    getTemplateString, 
+    isJsRuntimeMissing, 
+    preferences, 
+    updatePreferences, 
+    defaultDownloadPath, 
+    setDefaultDownloadPath 
+  } = useAppContext();
   
   const [url, setUrl] = useState('');
-  const [downloadPath, setDownloadPath] = useState<string>('');
-  const [mode, setMode] = useState<DownloadMode>('video');
-  const [selectedFormat, setSelectedFormat] = useState<DownloadFormatPreset>('best');
   
-  const [embedMetadata, setEmbedMetadata] = useState<boolean>(false);
-  const [embedThumbnail, setEmbedThumbnail] = useState<boolean>(false);
+  // State derived from Context, but local UI might update first then sync
+  // Actually, let's sync directly to Context for persistence.
+  // However, inputs usually need a controlled state. 
+  // We'll use local variables that sync from props initially, 
+  // OR just use the context values directly. Using context directly is cleaner for persistence.
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (url.trim()) {
-      // Contextual Warning for YouTube + Missing JS Runtime
       const isYoutube = url.includes('youtube.com') || url.includes('youtu.be');
       if (isYoutube && isJsRuntimeMissing) {
           const confirmed = window.confirm(
-              "JavaScript Runtime Missing\n\n" +
-              "You are attempting to download from YouTube without a configured JavaScript runtime (Node.js, Deno, or Bun).\n\n" +
-              "Recent YouTube changes require this to function correctly. The download may fail, be slow, or have limited quality.\n\n" +
-              "Do you want to proceed anyway?"
+              "JavaScript Runtime Missing\n\nProceed anyway?"
           );
           if (!confirmed) return;
       }
 
       const template = getTemplateString();
-      onDownload(url, downloadPath || undefined, selectedFormat, embedMetadata, embedThumbnail, template);
+      onDownload(
+          url, 
+          defaultDownloadPath || undefined, 
+          preferences.format_preset as DownloadFormatPreset, 
+          preferences.embed_metadata, 
+          preferences.embed_thumbnail, 
+          template
+      );
       setUrl('');
     }
   };
@@ -103,7 +113,7 @@ export function DownloadForm({ onDownload }: DownloadFormProps) {
     try {
         const selected = await selectDirectory();
         if (selected) {
-            setDownloadPath(selected);
+            setDefaultDownloadPath(selected);
         }
     } catch (err) {
         console.error("Failed to select directory", err);
@@ -111,18 +121,22 @@ export function DownloadForm({ onDownload }: DownloadFormProps) {
   };
   
   const handleModeChange = (newMode: DownloadMode) => {
-    setMode(newMode);
-    if (newMode === 'video') {
-        setSelectedFormat('best');
-    } else {
-        setSelectedFormat('audio_best');
+    // When switching modes, pick a default preset if current doesn't match
+    let newPreset = preferences.format_preset;
+    if (newMode === 'video' && preferences.format_preset.startsWith('audio')) {
+        newPreset = 'best';
+    } else if (newMode === 'audio' && !preferences.format_preset.startsWith('audio')) {
+        newPreset = 'audio_best';
     }
+
+    updatePreferences({ mode: newMode, format_preset: newPreset });
   };
 
   const isValidUrl = url.startsWith('http://') || url.startsWith('https://');
-  const filteredPresets = formatPresets.filter(p => p.mode === mode);
-  
   const isYoutube = url.includes('youtube.com') || url.includes('youtu.be');
+  const currentMode = preferences.mode as DownloadMode;
+  
+  const filteredPresets = formatPresets.filter(p => p.mode === currentMode);
 
   return (
     <Card className="bg-transparent border-0 shadow-none p-0">
@@ -166,7 +180,7 @@ export function DownloadForm({ onDownload }: DownloadFormProps) {
                  <div className="flex gap-2 mb-3">
                     <ModeButton 
                         mode="video" 
-                        currentMode={mode} 
+                        currentMode={currentMode} 
                         onClick={handleModeChange} 
                         icon={MonitorPlay} 
                         label="Video" 
@@ -174,7 +188,7 @@ export function DownloadForm({ onDownload }: DownloadFormProps) {
                     />
                     <ModeButton 
                         mode="audio" 
-                        currentMode={mode} 
+                        currentMode={currentMode} 
                         onClick={handleModeChange} 
                         icon={Headphones} 
                         label="Audio" 
@@ -184,8 +198,8 @@ export function DownloadForm({ onDownload }: DownloadFormProps) {
                  
                  <div className="space-y-3">
                      <select
-                        value={selectedFormat}
-                        onChange={(e) => setSelectedFormat(e.target.value as DownloadFormatPreset)}
+                        value={preferences.format_preset}
+                        onChange={(e) => updatePreferences({ format_preset: e.target.value })}
                         className="w-full bg-surfaceHighlight border border-border rounded-md px-3 py-2.5 text-sm text-zinc-300 focus:outline-none focus:ring-1 focus:ring-theme-cyan/50 focus:border-theme-cyan/50"
                      >
                         {filteredPresets.map(p => (
@@ -199,10 +213,10 @@ export function DownloadForm({ onDownload }: DownloadFormProps) {
                      <div className="flex gap-2">
                          <button
                             type="button"
-                            onClick={() => setEmbedMetadata(!embedMetadata)}
+                            onClick={() => updatePreferences({ embed_metadata: !preferences.embed_metadata })}
                             className={twMerge(
                                 "flex-1 flex items-center justify-center gap-2 px-2 py-2.5 rounded-md border transition-all text-xs font-medium",
-                                embedMetadata 
+                                preferences.embed_metadata 
                                     ? "bg-zinc-800 border-theme-cyan/50 text-theme-cyan"
                                     : "bg-surfaceHighlight border-border text-zinc-500 hover:text-zinc-300"
                             )}
@@ -214,10 +228,10 @@ export function DownloadForm({ onDownload }: DownloadFormProps) {
 
                          <button
                             type="button"
-                            onClick={() => setEmbedThumbnail(!embedThumbnail)}
+                            onClick={() => updatePreferences({ embed_thumbnail: !preferences.embed_thumbnail })}
                             className={twMerge(
                                 "flex-1 flex items-center justify-center gap-2 px-2 py-2.5 rounded-md border transition-all text-xs font-medium",
-                                embedThumbnail 
+                                preferences.embed_thumbnail 
                                     ? "bg-zinc-800 border-theme-cyan/50 text-theme-cyan"
                                     : "bg-surfaceHighlight border-border text-zinc-500 hover:text-zinc-300"
                             )}
@@ -236,9 +250,9 @@ export function DownloadForm({ onDownload }: DownloadFormProps) {
                   <div className="flex gap-2">
                      <input
                         type="text"
-                        value={downloadPath}
+                        value={defaultDownloadPath || ''}
                         readOnly
-                        placeholder="Downloads Folder"
+                        placeholder="Downloads Folder (System Default)"
                         className="flex-grow bg-surfaceHighlight border border-border rounded-md px-3 py-2.5 text-sm text-zinc-500 cursor-not-allowed"
                      />
                      <Button 
