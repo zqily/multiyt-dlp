@@ -56,13 +56,22 @@ export function useDownloadManager() {
 
   const startDownload = useCallback(async (
     url: string, 
-    downloadPath?: string, 
+    downloadPath: string | undefined, 
     formatPreset: DownloadFormatPreset = 'best',
     embedMetadata: boolean = false,
-    embedThumbnail: boolean = false
+    embedThumbnail: boolean = false,
+    filenameTemplate: string
   ) => {
     try {
-      const jobId = await apiStartDownload(url, downloadPath, formatPreset, embedMetadata, embedThumbnail); 
+      const jobId = await apiStartDownload(
+          url, 
+          downloadPath, 
+          formatPreset, 
+          embedMetadata, 
+          embedThumbnail,
+          filenameTemplate
+      ); 
+      
       setDownloads((prev) => {
         const newMap = new Map(prev);
         newMap.set(jobId, {

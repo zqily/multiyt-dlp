@@ -6,15 +6,17 @@ import { Card, CardContent } from './ui/Card';
 import { Download, FolderOpen, Link2, MonitorPlay, Headphones, FileText, Image as ImageIcon } from 'lucide-react';
 import { selectDirectory } from '@/api/invoke';
 import { DownloadFormatPreset } from '@/types';
+import { useAppContext } from '@/contexts/AppContext';
 import { twMerge } from 'tailwind-merge';
 
 interface DownloadFormProps {
   onDownload: (
       url: string, 
-      downloadPath?: string, 
-      formatPreset?: DownloadFormatPreset, 
-      embedMeta?: boolean,
-      embedThumbnail?: boolean
+      downloadPath: string | undefined, 
+      formatPreset: DownloadFormatPreset, 
+      embedMeta: boolean,
+      embedThumbnail: boolean,
+      filenameTemplate: string
     ) => void;
 }
 
@@ -68,6 +70,8 @@ const ModeButton: React.FC<ModeButtonProps> = ({ mode, currentMode, icon: Icon, 
 };
 
 export function DownloadForm({ onDownload }: DownloadFormProps) {
+  const { getTemplateString } = useAppContext();
+  
   const [url, setUrl] = useState('');
   const [downloadPath, setDownloadPath] = useState<string>('');
   const [mode, setMode] = useState<DownloadMode>('video');
@@ -79,7 +83,8 @@ export function DownloadForm({ onDownload }: DownloadFormProps) {
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (url.trim()) {
-      onDownload(url, downloadPath || undefined, selectedFormat, embedMetadata, embedThumbnail);
+      const template = getTemplateString();
+      onDownload(url, downloadPath || undefined, selectedFormat, embedMetadata, embedThumbnail, template);
       setUrl('');
     }
   };

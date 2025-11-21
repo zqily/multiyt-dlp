@@ -60,6 +60,17 @@ export interface Download {
   filename?: string;
   phase?: string;
   preset?: DownloadFormatPreset; 
-  embedMetadata?: boolean; // Changed from embedMeta
-  embedThumbnail?: boolean; // Added
+  embedMetadata?: boolean; 
+  embedThumbnail?: boolean;
+}
+
+// --- Settings Types ---
+
+export type TemplateBlockType = 'variable' | 'separator' | 'text';
+
+export interface TemplateBlock {
+  id: string;
+  type: TemplateBlockType;
+  value: string; // The yt-dlp string (e.g., "title" or ".")
+  label: string; // Display name (e.g., "Title" or ".")
 }

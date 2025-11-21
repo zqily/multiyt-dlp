@@ -1,8 +1,9 @@
 // src/components/Layout.tsx
 
-import { ReactNode } from 'react';
+import { ReactNode, useState } from 'react';
 import { Settings } from 'lucide-react';
 import { Button } from './ui/Button';
+import { SettingsModal } from './settings/SettingsModal';
 
 interface LayoutProps {
   SidebarContent: ReactNode;
@@ -10,8 +11,12 @@ interface LayoutProps {
 }
 
 export function Layout({ SidebarContent, MainContent }: LayoutProps) {
+  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+
   return (
     <div className="flex h-screen overflow-hidden bg-zinc-900 text-zinc-100">
+      <SettingsModal isOpen={isSettingsOpen} onClose={() => setIsSettingsOpen(false)} />
+      
       {/* Sidebar */}
       <aside className="w-80 flex-shrink-0 bg-zinc-900/50 border-r border-zinc-800 p-4 overflow-y-auto flex flex-col">
         <div className="flex items-center justify-between px-2 mb-8 mt-4">
@@ -23,7 +28,13 @@ export function Layout({ SidebarContent, MainContent }: LayoutProps) {
                     Concurrent Video Downloader
                 </div>
             </div>
-            <Button variant="ghost" size="icon" title="Settings" className="text-zinc-500 hover:text-white">
+            <Button 
+                variant="ghost" 
+                size="icon" 
+                title="Settings" 
+                className="text-zinc-500 hover:text-white"
+                onClick={() => setIsSettingsOpen(true)}
+            >
                 <Settings className="h-5 w-5" />
             </Button>
         </div>

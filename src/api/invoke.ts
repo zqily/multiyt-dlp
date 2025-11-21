@@ -24,14 +24,16 @@ export async function startDownload(
   downloadPath: string | undefined, 
   formatPreset: DownloadFormatPreset,
   embedMetadata: boolean,
-  embedThumbnail: boolean
+  embedThumbnail: boolean,
+  filenameTemplate: string
 ): Promise<string> {
   return await invoke("start_download", { 
     url, 
     downloadPath, 
     formatPreset,
     embedMetadata,
-    embedThumbnail
+    embedThumbnail,
+    filenameTemplate
   });
 }
 

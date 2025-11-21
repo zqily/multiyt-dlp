@@ -1,19 +1,45 @@
-import React from 'react';
-
-// This is a placeholder for global application settings,
-// as outlined in the master plan. It can be expanded to manage
-// user configurations like the default download path.
+import React, { useState } from 'react';
+import { TemplateBlock } from '@/types';
 
 interface AppContextType {
-  // Example setting
   defaultDownloadPath: string | null;
+  setDefaultDownloadPath: (path: string) => void;
+  
+  // Filename Template Settings
+  filenameTemplateBlocks: TemplateBlock[];
+  setFilenameTemplateBlocks: (blocks: TemplateBlock[]) => void;
+  getTemplateString: () => string;
 }
+
+const DEFAULT_TEMPLATE_BLOCKS: TemplateBlock[] = [
+  { id: 'def-1', type: 'variable', value: 'title', label: 'Title' },
+  { id: 'def-2', type: 'separator', value: '.', label: '.' },
+  { id: 'def-3', type: 'variable', value: 'ext', label: 'Extension' },
+];
 
 export const AppContext = React.createContext<AppContextType | undefined>(undefined);
 
 export const AppProvider = ({ children }: { children: React.ReactNode }) => {
+  const [defaultDownloadPath, setDefaultDownloadPath] = useState<string | null>(null);
+  const [filenameTemplateBlocks, setFilenameTemplateBlocks] = useState<TemplateBlock[]>(DEFAULT_TEMPLATE_BLOCKS);
+
+  // Helper to convert blocks to yt-dlp string
+  // e.g. [Title] [.] [Ext] -> "%(title)s.%(ext)s"
+  const getTemplateString = () => {
+    return filenameTemplateBlocks.map(block => {
+        if (block.type === 'variable') {
+            return `%(${block.value})s`;
+        }
+        return block.value;
+    }).join('');
+  };
+
   const value = {
-    defaultDownloadPath: null, // To be loaded from config
+    defaultDownloadPath,
+    setDefaultDownloadPath,
+    filenameTemplateBlocks,
+    setFilenameTemplateBlocks,
+    getTemplateString
   };
 
   return <AppContext.Provider value={value}>{children}</AppContext.Provider>;

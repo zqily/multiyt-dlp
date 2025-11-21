@@ -69,6 +69,7 @@ pub async fn run_download_process(
     format_preset: DownloadFormatPreset,
     embed_metadata: bool,
     embed_thumbnail: bool,
+    filename_template: String, // New arg
     app_handle: AppHandle,
     manager: Arc<Mutex<JobManager>>,
 ) {
@@ -87,8 +88,8 @@ pub async fn run_download_process(
         }
     };
     
-    // We explicitly use the default template so we can rely on the standard naming for parsing
-    let output_template = downloads_dir.join("%(title)s. [%(id)s].%(ext)s");
+    // Use the provided template
+    let output_template = downloads_dir.join(&filename_template);
     let output_template_str = match output_template.to_str() {
         Some(s) => s.to_string(),
         None => {
@@ -216,6 +217,8 @@ pub async fn run_download_process(
     let mut captured_logs = Vec::new();
 
     // Helper closure to extract clean title from path
+    // NOTE: Since we now use custom templates, TITLE_CLEANER_REGEX might not always match perfectly,
+    // but it's still a good heuristic for removing ID/Tags if they appear at the end.
     let extract_title = |path_str: &str| -> Option<String> {
         let path = std::path::Path::new(path_str);
         if let Some(name_os) = path.file_name() {

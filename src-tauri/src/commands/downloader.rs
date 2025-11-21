@@ -18,7 +18,8 @@ pub async fn start_download(
     download_path: Option<String>,
     format_preset: DownloadFormatPreset,
     embed_metadata: bool,
-    embed_thumbnail: bool, // New argument
+    embed_thumbnail: bool,
+    filename_template: String, // New argument
     app_handle: AppHandle,
     manager: State<'_, Arc<Mutex<JobManager>>>,
 ) -> Result<Uuid, AppError> {
@@ -26,6 +27,18 @@ pub async fn start_download(
     if !url.starts_with("http://") && !url.starts_with("https://") {
         return Err(AppError::ValidationFailed("Invalid URL provided.".into()));
     }
+
+    // Sanitize template to prevent directory traversal or empty strings
+    let safe_template = if filename_template.trim().is_empty() {
+        "%(title)s.%(ext)s".to_string()
+    } else {
+        // Basic check to ensure user doesn't try to traverse directories in the filename template
+        // e.g., "../../../secret.txt"
+        if filename_template.contains("..") || filename_template.starts_with("/") || filename_template.starts_with("\\") {
+             return Err(AppError::ValidationFailed("Invalid characters in filename template.".into()));
+        }
+        filename_template
+    };
 
     let job_id = Uuid::new_v4();
     let job = Job::new(url.clone());
@@ -42,7 +55,8 @@ pub async fn start_download(
             download_path, 
             format_preset, 
             embed_metadata,
-            embed_thumbnail, // Pass to process
+            embed_thumbnail, 
+            safe_template, // Pass to process
             app_handle, 
             manager_clone
         ).await;
