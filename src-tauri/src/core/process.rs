@@ -15,8 +15,9 @@ use crate::models::{DownloadCompletePayload, DownloadErrorPayload, DownloadProgr
 // --- Regex Definitions ---
 
 // Captures: [download] 12.3% of ~1.23MiB at 5.55MiB/s ETA 00:18
+// Updated to handle: [download] 0.1% of 1.37MiB at Unknown B/s ETA Unknown
 static PROGRESS_REGEX: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r"\[download\]\s+(?P<percentage>[\d\.]+)%\s+of\s+~?\s*(?P<size>[^\s]+)(?:\s+at\s+(?P<speed>[^\s]+))?(?:\s+ETA\s+(?P<eta>[^\s]+))?").unwrap()
+    Regex::new(r"\[download\]\s+(?P<percentage>[\d\.]+)%\s+of\s+~?\s*(?P<size>[^\s]+)(?:\s+at\s+(?P<speed>[^\s]+(?:\s+B/s)?))?(?:\s+ETA\s+(?P<eta>[^\s]+))?").unwrap()
 });
 
 // Captures: [download] Destination: path/to/Title. [id].f123.mp4
@@ -34,6 +35,11 @@ static MERGER_REGEX: Lazy<Regex> = Lazy::new(|| {
     Regex::new(r#"\[Merger\]\s+Merging formats into\s+"?(?P<filename>.+?)"?$"#).unwrap()
 });
 
+// Captures: [ExtractAudio] Destination: path/to/file.opus
+static EXTRACT_AUDIO_REGEX: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r"^\[ExtractAudio\]\s+Destination:\s+(?P<filename>.+)$").unwrap()
+});
+
 // Helper regex to clean the Title.
 // Matches the default yt-dlp suffix: " [VideoID].ext" or " [VideoID].fFormat.ext"
 static TITLE_CLEANER_REGEX: Lazy<Regex> = Lazy::new(|| {
@@ -44,7 +50,7 @@ pub async fn run_download_process(
     job_id: Uuid,
     url: String,
     custom_path: Option<String>,
-    format_preset: DownloadFormatPreset, // New argument
+    format_preset: DownloadFormatPreset,
     app_handle: AppHandle,
     manager: Arc<Mutex<JobManager>>,
 ) {
@@ -114,7 +120,6 @@ pub async fn run_download_process(
             cmd.arg("-x").args(["--audio-format", "m4a", "--audio-quality", "0"]);
         }
     }
-    // --- End Format Preset Logic ---
 
     // --- Process Spawning ---
 
@@ -152,8 +157,6 @@ pub async fn run_download_process(
     let stdout = child.stdout.take().expect("Failed to capture stdout");
     let stderr = child.stderr.take().expect("Failed to capture stderr");
 
-    // We use an MPSC channel to aggregate both stdout and stderr lines into a single processing loop.
-    // This avoids complexity regarding where yt-dlp decides to print progress.
     let (tx, mut rx) = mpsc::channel::<String>(100);
 
     // Spawn Stdout Reader
@@ -174,13 +177,12 @@ pub async fn run_download_process(
         }
     });
 
-    // We drop the original `tx` so the channel closes when both readers finish.
     drop(tx);
 
     // --- State Tracking ---
     let mut clean_title: Option<String> = None;
     let mut final_filepath: Option<String> = None;
-    let mut download_count = 0; // 0 = none, 1 = first file (video), 2 = second file (audio)
+    let mut download_count = 0; 
     let mut captured_logs = Vec::new();
 
     // Loop until both streams are exhausted
@@ -189,7 +191,6 @@ pub async fn run_download_process(
         if trimmed.is_empty() { continue; }
 
         captured_logs.push(trimmed.to_string());
-        // Keep log size sane
         if captured_logs.len() > 50 { captured_logs.remove(0); }
 
         // 1. Check for Destination (Start of a file download)
@@ -197,19 +198,15 @@ pub async fn run_download_process(
             if let Some(f) = caps.name("filename") {
                 let full_path = f.as_str().to_string();
                 
-                // If this is the first file, try to extract a clean title
                 if clean_title.is_none() {
-                    // Naive extraction: get filename from path, remove extension/id
                     let path = std::path::Path::new(&full_path);
                     if let Some(name_os) = path.file_name() {
                         let name_str = name_os.to_string_lossy().to_string();
-                        // Remove the " [id].ext" suffix
                         let cleaned = TITLE_CLEANER_REGEX.replace(&name_str, "");
                         clean_title = Some(cleaned.to_string());
                     }
                 }
                 
-                // Fallback for final path if no merger happens
                 final_filepath = Some(full_path);
                 download_count += 1;
             }
@@ -218,22 +215,34 @@ pub async fn run_download_process(
         else if let Some(caps) = MERGER_REGEX.captures(trimmed) {
             if let Some(f) = caps.name("filename") {
                 final_filepath = Some(f.as_str().to_string());
-                // Send a specific status update
                 let _ = app_handle.emit_all("download-progress", DownloadProgressPayload {
                     job_id,
                     percentage: 100.0,
                     speed: "N/A".to_string(),
                     eta: "Done".to_string(),
                     filename: clean_title.clone(),
-                    phase: Some("Merging".to_string()),
+                    phase: Some("Merging Formats".to_string()),
                 });
             }
         }
-        // 3. Check for "Already downloaded"
+        // 3. Check for Extraction (Audio conversion)
+        else if let Some(caps) = EXTRACT_AUDIO_REGEX.captures(trimmed) {
+            if let Some(f) = caps.name("filename") {
+                final_filepath = Some(f.as_str().to_string());
+                let _ = app_handle.emit_all("download-progress", DownloadProgressPayload {
+                    job_id,
+                    percentage: 100.0,
+                    speed: "N/A".to_string(),
+                    eta: "Done".to_string(),
+                    filename: clean_title.clone(),
+                    phase: Some("Extracting Audio".to_string()),
+                });
+            }
+        }
+        // 4. Check for "Already downloaded"
         else if let Some(caps) = ALREADY_DOWNLOADED_REGEX.captures(trimmed) {
             if let Some(f) = caps.name("filename") {
                 final_filepath = Some(f.as_str().to_string());
-                // Set clean title if we didn't get it yet
                 if clean_title.is_none() {
                     let path = std::path::Path::new(final_filepath.as_ref().unwrap());
                     if let Some(name_os) = path.file_name() {
@@ -253,14 +262,13 @@ pub async fn run_download_process(
                 });
             }
         }
-        // 4. Check for Progress
+        // 5. Check for Progress
         else if let Some(caps) = PROGRESS_REGEX.captures(trimmed) {
              if let Some(percentage_str) = caps.name("percentage") {
                 if let Ok(percentage) = percentage_str.as_str().parse::<f32>() {
                     let speed = caps.name("speed").map_or("Unknown", |m| m.as_str()).to_string();
                     let eta = caps.name("eta").map_or("Unknown", |m| m.as_str()).to_string();
 
-                    // Determine Phase Text
                     let phase = if download_count <= 1 {
                         "Downloading Video".to_string()
                     } else {
@@ -285,7 +293,6 @@ pub async fn run_download_process(
     let status = child.wait().await.expect("Child process encountered an error");
     let mut manager_lock = manager.lock().unwrap();
 
-    // Check if job still exists (wasn't cancelled manually)
     if let Some(job_status) = manager_lock.get_job_status(job_id) {
         if job_status == JobStatus::Cancelled {
             manager_lock.remove_job(job_id);
@@ -304,7 +311,6 @@ pub async fn run_download_process(
             });
         } else {
             manager_lock.update_job_status(job_id, JobStatus::Error).ok();
-            // Send the last few logs as context
             let context = captured_logs.join("\n");
             let _ = app_handle.emit_all("download-error", DownloadErrorPayload {
                 job_id,
