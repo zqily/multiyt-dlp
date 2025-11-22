@@ -62,26 +62,36 @@ pub async fn run_download_process(
         }
     };
     
-    let output_template = downloads_dir.join(&job_data.filename_template);
-    let output_template_str = match output_template.to_str() {
-        Some(s) => s.to_string(),
-        None => {
-             emit_error(job_id, "Download path contains invalid characters.".into(), &app_handle, &manager);
-             return;
+    // FIX 1: Ensure the directory exists before spawning, as we will set it as CWD
+    if !downloads_dir.exists() {
+        if let Err(e) = std::fs::create_dir_all(&downloads_dir) {
+            emit_error(job_id, format!("Failed to create download directory: {}", e), &app_handle, &manager);
+            return;
         }
-    };
+    }
 
     // --- Build Command ---
     let mut cmd = Command::new("yt-dlp");
+    
+    // FIX 2: Enforce UTF-8 everywhere to prevent cp1252 crashes
     cmd.env("PYTHONUTF8", "1");
     cmd.env("PYTHONIOENCODING", "utf-8");
+    
+    // FIX 3: Set Working Directory to the download folder
+    // This prevents us from having to pass absolute paths (which break on special chars in Windows) to the -o flag
+    cmd.current_dir(&downloads_dir);
 
     cmd.arg(&url)
         .arg("-o")
-        .arg(&output_template_str)
+        .arg(&job_data.filename_template) // Pass ONLY the template, relative to CWD
         .arg("--no-playlist")
         .arg("--no-simulate") 
         .arg("--newline")
+        // FIX 4: Explicitly tell yt-dlp to handle Windows filenames, just in case
+        .arg("--windows-filenames")
+        // FIX 5: Force internal encoding to UTF-8 to match our Python env vars
+        .arg("--encoding")
+        .arg("utf-8")
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
 
