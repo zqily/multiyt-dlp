@@ -2,8 +2,6 @@ import { invoke } from "@tauri-apps/api/tauri";
 import { open } from "@tauri-apps/api/dialog";
 import { DownloadFormatPreset, AppDependencies, AppConfig, GeneralConfig, PreferenceConfig } from '@/types';
 
-// ... (Existing functions checkDependencies, openExternalLink) ...
-
 export async function checkDependencies(): Promise<AppDependencies> {
     return await invoke("check_dependencies");
 }
@@ -36,6 +34,7 @@ export async function startDownload(
   url: string, 
   downloadPath: string | undefined, 
   formatPreset: DownloadFormatPreset,
+  videoResolution: string, // NEW ARG
   embedMetadata: boolean,
   embedThumbnail: boolean,
   filenameTemplate: string
@@ -44,6 +43,7 @@ export async function startDownload(
     url, 
     downloadPath, 
     formatPreset,
+    videoResolution,
     embedMetadata,
     embedThumbnail,
     filenameTemplate

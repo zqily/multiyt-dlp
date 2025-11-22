@@ -9,6 +9,7 @@ export interface GeneralConfig {
 export interface PreferenceConfig {
   mode: string;
   format_preset: string;
+  video_resolution: string; // NEW
   embed_metadata: boolean;
   embed_thumbnail: boolean;
 }

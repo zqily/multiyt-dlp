@@ -58,6 +58,7 @@ export function useDownloadManager() {
     url: string, 
     downloadPath: string | undefined, 
     formatPreset: DownloadFormatPreset = 'best',
+    videoResolution: string, // NEW: Added this argument
     embedMetadata: boolean = false,
     embedThumbnail: boolean = false,
     filenameTemplate: string
@@ -66,7 +67,8 @@ export function useDownloadManager() {
       const jobId = await apiStartDownload(
           url, 
           downloadPath, 
-          formatPreset, 
+          formatPreset,
+          videoResolution, // Pass to API
           embedMetadata, 
           embedThumbnail,
           filenameTemplate

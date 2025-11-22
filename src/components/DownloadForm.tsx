@@ -12,6 +12,7 @@ interface DownloadFormProps {
       url: string, 
       downloadPath: string | undefined, 
       formatPreset: DownloadFormatPreset, 
+      videoResolution: string,
       embedMeta: boolean,
       embedThumbnail: boolean,
       filenameTemplate: string
@@ -33,6 +34,17 @@ const formatPresets: {
   { label: 'MP3 Audio', value: 'audio_mp3', mode: 'audio' },
   { label: 'FLAC (Lossless)', value: 'audio_flac', mode: 'audio' },
   { label: 'M4A Audio', value: 'audio_m4a', mode: 'audio' },
+];
+
+const resolutionOptions = [
+    { label: 'Best Available', value: 'best' },
+    { label: '4K (2160p)', value: '2160p' },
+    { label: '2K (1440p)', value: '1440p' },
+    { label: 'Full HD (1080p)', value: '1080p' },
+    { label: 'HD (720p)', value: '720p' },
+    { label: 'SD (480p)', value: '480p' },
+    { label: 'Low (360p)', value: '360p' },
+    { label: 'Lowest (240p)', value: '240p' },
 ];
 
 interface ModeButtonProps {
@@ -78,12 +90,6 @@ export function DownloadForm({ onDownload }: DownloadFormProps) {
   } = useAppContext();
   
   const [url, setUrl] = useState('');
-  
-  // State derived from Context, but local UI might update first then sync
-  // Actually, let's sync directly to Context for persistence.
-  // However, inputs usually need a controlled state. 
-  // We'll use local variables that sync from props initially, 
-  // OR just use the context values directly. Using context directly is cleaner for persistence.
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -100,7 +106,8 @@ export function DownloadForm({ onDownload }: DownloadFormProps) {
       onDownload(
           url, 
           defaultDownloadPath || undefined, 
-          preferences.format_preset as DownloadFormatPreset, 
+          preferences.format_preset as DownloadFormatPreset,
+          preferences.video_resolution, // Pass resolution
           preferences.embed_metadata, 
           preferences.embed_thumbnail, 
           template
@@ -121,7 +128,6 @@ export function DownloadForm({ onDownload }: DownloadFormProps) {
   };
   
   const handleModeChange = (newMode: DownloadMode) => {
-    // When switching modes, pick a default preset if current doesn't match
     let newPreset = preferences.format_preset;
     if (newMode === 'video' && preferences.format_preset.startsWith('audio')) {
         newPreset = 'best';
@@ -197,17 +203,38 @@ export function DownloadForm({ onDownload }: DownloadFormProps) {
                  </div>
                  
                  <div className="space-y-3">
-                     <select
-                        value={preferences.format_preset}
-                        onChange={(e) => updatePreferences({ format_preset: e.target.value })}
-                        className="w-full bg-surfaceHighlight border border-border rounded-md px-3 py-2.5 text-sm text-zinc-300 focus:outline-none focus:ring-1 focus:ring-theme-cyan/50 focus:border-theme-cyan/50"
-                     >
-                        {filteredPresets.map(p => (
-                            <option key={p.value} value={p.value}>
-                                {p.label}
-                            </option>
-                        ))}
-                     </select>
+                     <div className="flex gap-3">
+                         <div className="flex-1">
+                            <select
+                                value={preferences.format_preset}
+                                onChange={(e) => updatePreferences({ format_preset: e.target.value })}
+                                className="w-full bg-surfaceHighlight border border-border rounded-md px-3 py-2.5 text-sm text-zinc-300 focus:outline-none focus:ring-1 focus:ring-theme-cyan/50 focus:border-theme-cyan/50"
+                            >
+                                {filteredPresets.map(p => (
+                                    <option key={p.value} value={p.value}>
+                                        {p.label}
+                                    </option>
+                                ))}
+                            </select>
+                         </div>
+
+                         {/* Resolution Dropdown - Only show for Video */}
+                         {currentMode === 'video' && (
+                             <div className="flex-1">
+                                <select
+                                    value={preferences.video_resolution}
+                                    onChange={(e) => updatePreferences({ video_resolution: e.target.value })}
+                                    className="w-full bg-surfaceHighlight border border-border rounded-md px-3 py-2.5 text-sm text-zinc-300 focus:outline-none focus:ring-1 focus:ring-theme-cyan/50 focus:border-theme-cyan/50"
+                                >
+                                    {resolutionOptions.map(r => (
+                                        <option key={r.value} value={r.value}>
+                                            {r.label}
+                                        </option>
+                                    ))}
+                                </select>
+                             </div>
+                         )}
+                     </div>
 
                      {/* Post Processing Options */}
                      <div className="flex gap-2">

@@ -16,48 +16,38 @@ use crate::models::{DownloadCompletePayload, DownloadErrorPayload, DownloadProgr
 
 // --- Regex Definitions ---
 
-// [download] 12.3% of ~1.23MiB at 5.55MiB/s ETA 00:18
 static PROGRESS_REGEX: Lazy<Regex> = Lazy::new(|| {
     Regex::new(r"\[download\]\s+(?P<percentage>[\d\.]+)%\s+of\s+~?\s*(?P<size>[^\s]+)(?:\s+at\s+(?P<speed>[^\s]+(?:\s+B/s)?))?(?:\s+ETA\s+(?P<eta>[^\s]+))?").unwrap()
 });
 
-// [download] Destination: path/to/Title. [id].f123.mp4
 static DESTINATION_REGEX: Lazy<Regex> = Lazy::new(|| {
     Regex::new(r"^\[download\]\s+Destination:\s+(?P<filename>.+)$").unwrap()
 });
 
-// [download] path/to/file has already been downloaded
 static ALREADY_DOWNLOADED_REGEX: Lazy<Regex> = Lazy::new(|| {
     Regex::new(r"\[download\]\s+(?:Destination:\s+)?(?P<filename>.+?)\s+has already been downloaded").unwrap()
 });
 
-// [Merger] Merging formats into "path/to/file.mkv"
 static MERGER_REGEX: Lazy<Regex> = Lazy::new(|| {
     Regex::new(r#"\[Merger\]\s+Merging formats into\s+"?(?P<filename>.+?)"?$"#).unwrap()
 });
 
-// [ExtractAudio] Destination: path/to/file.opus
 static EXTRACT_AUDIO_REGEX: Lazy<Regex> = Lazy::new(|| {
     Regex::new(r"^\[ExtractAudio\]\s+Destination:\s+(?P<filename>.+)$").unwrap()
 });
 
-// [Metadata] Adding metadata to: path/to/file
 static METADATA_REGEX: Lazy<Regex> = Lazy::new(|| {
     Regex::new(r"^\[Metadata\]\s+Adding metadata to:\s+(?P<filename>.+)$").unwrap()
 });
 
-// [Thumbnails] Downloading thumbnail ... or [EmbedThumbnail] ...
 static THUMBNAIL_REGEX: Lazy<Regex> = Lazy::new(|| {
     Regex::new(r"^\[(?:Thumbnails|EmbedThumbnail)\]").unwrap()
 });
 
-// [FixupM3u8] Fixing output file
 static FIXUP_REGEX: Lazy<Regex> = Lazy::new(|| {
     Regex::new(r"^\[(?:Fixup\w+)\]").unwrap()
 });
 
-// Helper regex to clean the Title.
-// Matches the default yt-dlp suffix: " [VideoID].ext" or " [VideoID].fFormat.ext"
 static TITLE_CLEANER_REGEX: Lazy<Regex> = Lazy::new(|| {
     Regex::new(r"\s\[[a-zA-Z0-9_-]{11}\]\.(?:f[0-9]+\.)?[a-z0-9]+$").unwrap()
 });
@@ -67,9 +57,10 @@ pub async fn run_download_process(
     url: String,
     custom_path: Option<String>,
     format_preset: DownloadFormatPreset,
+    video_resolution: String, 
     embed_metadata: bool,
     embed_thumbnail: bool,
-    filename_template: String, // New arg
+    filename_template: String, 
     app_handle: AppHandle,
     manager: Arc<Mutex<JobManager>>,
 ) {
@@ -88,7 +79,6 @@ pub async fn run_download_process(
         }
     };
     
-    // Use the provided template
     let output_template = downloads_dir.join(&filename_template);
     let output_template_str = match output_template.to_str() {
         Some(s) => s.to_string(),
@@ -102,38 +92,62 @@ pub async fn run_download_process(
     };
 
     let mut cmd = Command::new("yt-dlp");
+
+    // --- WINDOWS ENCODING FIXES ---
+    // 1. Attempt to force UTF-8 mode in Python (helps if Python 3.7+ is embedded)
+    cmd.env("PYTHONUTF8", "1");
+    // 2. Attempt to force IO encoding (though PyInstaller binaries often ignore this)
+    cmd.env("PYTHONIOENCODING", "utf-8");
+
     cmd.arg(&url)
         .arg("-o")
         .arg(&output_template_str)
         .arg("--no-playlist")
         .arg("--no-simulate") 
         .arg("--newline")
+        // 3. RESTRICT FILENAMES (The Primary Fix)
+        // Forces filenames to be ASCII-only (e.g. "💀" becomes "_").
+        // This bypasses the cp1252 pipe crash because no special chars are ever printed to stdout.
+        .arg("--restrict-filenames")
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
 
-    // --- Metadata & Thumbnail Options ---
-    if embed_metadata {
-        cmd.arg("--embed-metadata");
-    }
-    
-    if embed_thumbnail {
-        cmd.arg("--embed-thumbnail");
-    }
+    // --- Metadata & Thumbnail ---
+    if embed_metadata { cmd.arg("--embed-metadata"); }
+    if embed_thumbnail { cmd.arg("--embed-thumbnail"); }
 
-    // --- Format Preset Logic ---
+    // --- Resolution Filter ---
+    let height_filter = if video_resolution != "best" {
+        let number_part: String = video_resolution.chars().filter(|c| c.is_numeric()).collect();
+        if !number_part.is_empty() {
+            format!("[height<={}]", number_part)
+        } else {
+            String::new()
+        }
+    } else {
+        String::new()
+    };
+
+    // --- Format Logic ---
     match format_preset {
         DownloadFormatPreset::Best => {
-            // Default behavior
+            if !height_filter.is_empty() {
+                 cmd.arg("-f").arg(format!("bestvideo{}+bestaudio/best{}", height_filter, height_filter));
+            }
         }
         DownloadFormatPreset::BestMp4 => {
-            cmd.args(["-f", "bestvideo+bestaudio", "--merge-output-format", "mp4"]);
+            cmd.arg("-f").arg(format!("bestvideo{}+bestaudio", height_filter));
+            cmd.args(["--merge-output-format", "mp4"]);
         }
         DownloadFormatPreset::BestMkv => {
-            cmd.args(["-f", "bestvideo+bestaudio", "--merge-output-format", "mkv"]);
+            cmd.arg("-f").arg(format!("bestvideo{}+bestaudio", height_filter));
+            cmd.args(["--merge-output-format", "mkv"]);
         }
         DownloadFormatPreset::BestWebm => {
-            cmd.args(["-f", "bestvideo+bestaudio", "--merge-output-format", "webm"]);
+            cmd.arg("-f").arg(format!("bestvideo{}+bestaudio", height_filter));
+            cmd.args(["--merge-output-format", "webm"]);
         }
+        
         DownloadFormatPreset::AudioBest => {
             cmd.arg("-x").args(["-f", "bestaudio/best"]);
         }
@@ -163,7 +177,6 @@ pub async fn run_download_process(
 
     let pid = child.id().expect("Failed to get child process ID");
     
-    // Update Manager with PID
     let should_continue = {
         let mut manager_lock = manager.lock().unwrap();
         if manager_lock.update_job_pid(job_id, pid).is_ok() {
@@ -183,10 +196,8 @@ pub async fn run_download_process(
 
     let stdout = child.stdout.take().expect("Failed to capture stdout");
     let stderr = child.stderr.take().expect("Failed to capture stderr");
-
     let (tx, mut rx) = mpsc::channel::<String>(100);
 
-    // Spawn Stdout Reader
     let tx_out = tx.clone();
     tokio::spawn(async move {
         let mut reader = BufReader::new(stdout).lines();
@@ -195,7 +206,6 @@ pub async fn run_download_process(
         }
     });
 
-    // Spawn Stderr Reader
     let tx_err = tx.clone();
     tokio::spawn(async move {
         let mut reader = BufReader::new(stderr).lines();
@@ -213,12 +223,8 @@ pub async fn run_download_process(
     let mut state_speed: String = "Starting...".to_string();
     let mut state_eta: String = "Calculating...".to_string();
     let mut state_phase: String = "Initializing".to_string();
-
     let mut captured_logs = Vec::new();
 
-    // Helper closure to extract clean title from path
-    // NOTE: Since we now use custom templates, TITLE_CLEANER_REGEX might not always match perfectly,
-    // but it's still a good heuristic for removing ID/Tags if they appear at the end.
     let extract_title = |path_str: &str| -> Option<String> {
         let path = std::path::Path::new(path_str);
         if let Some(name_os) = path.file_name() {
@@ -229,33 +235,28 @@ pub async fn run_download_process(
         None
     };
 
-    // Loop until both streams are exhausted
     while let Some(line) = rx.recv().await {
         let trimmed = line.trim();
         if trimmed.is_empty() { continue; }
-
+        
         captured_logs.push(trimmed.to_string());
         if captured_logs.len() > 50 { captured_logs.remove(0); }
 
         let mut emit_update = false;
 
-        // 1. Check Phase: Metadata
         if let Some(caps) = METADATA_REGEX.captures(trimmed) {
             if let Some(f) = caps.name("filename") {
                 state_final_filepath = Some(f.as_str().to_string());
             }
             state_phase = "Writing Metadata".to_string();
-            // Often metadata writing is near instant, keep percentage at 100 if we reached it
             if state_percentage < 100.0 { state_percentage = 99.0; } 
             emit_update = true;
         }
-        // 2. Check Phase: Thumbnails
         else if THUMBNAIL_REGEX.is_match(trimmed) {
             state_phase = "Embedding Thumbnail".to_string();
             if state_percentage < 100.0 { state_percentage = 99.0; }
             emit_update = true;
         }
-        // 3. Check Phase: Merger
         else if let Some(caps) = MERGER_REGEX.captures(trimmed) {
             if let Some(f) = caps.name("filename") {
                 state_final_filepath = Some(f.as_str().to_string());
@@ -266,7 +267,6 @@ pub async fn run_download_process(
             state_eta = "Done".to_string();
             emit_update = true;
         }
-        // 4. Check Phase: Extract Audio
         else if let Some(caps) = EXTRACT_AUDIO_REGEX.captures(trimmed) {
             if let Some(f) = caps.name("filename") {
                 state_final_filepath = Some(f.as_str().to_string());
@@ -277,12 +277,10 @@ pub async fn run_download_process(
             state_eta = "Done".to_string();
             emit_update = true;
         }
-        // 5. Check Phase: Fixup
         else if FIXUP_REGEX.is_match(trimmed) {
             state_phase = "Fixing Container".to_string();
             emit_update = true;
         }
-        // 6. Check Phase: Already Downloaded
         else if let Some(caps) = ALREADY_DOWNLOADED_REGEX.captures(trimmed) {
             if let Some(f) = caps.name("filename") {
                 state_final_filepath = Some(f.as_str().to_string());
@@ -294,7 +292,6 @@ pub async fn run_download_process(
             state_speed = "N/A".to_string();
             emit_update = true;
         }
-        // 7. Check Destination (Filename discovery)
         else if let Some(caps) = DESTINATION_REGEX.captures(trimmed) {
             if let Some(f) = caps.name("filename") {
                 let full_path = f.as_str().to_string();
@@ -306,13 +303,10 @@ pub async fn run_download_process(
                 emit_update = true;
             }
         }
-        // 8. Check Progress
         else if let Some(caps) = PROGRESS_REGEX.captures(trimmed) {
              if let Some(percentage_str) = caps.name("percentage") {
                 if let Ok(p) = percentage_str.as_str().parse::<f32>() {
                     state_percentage = p;
-                    
-                    // Only update speed/eta if present and not "Unknown" (keep last known)
                     if let Some(s) = caps.name("speed") {
                         let s_str = s.as_str();
                         if s_str != "Unknown" && !s_str.contains("N/A") {
@@ -325,12 +319,9 @@ pub async fn run_download_process(
                             state_eta = e_str.to_string();
                         }
                     }
-                    
-                    // If we are downloading, ensure phase says so (unless we were in a post-process)
                     if !state_phase.contains("Merging") && !state_phase.contains("Extracting") && !state_phase.contains("Writing") && !state_phase.contains("Embedding") {
                         state_phase = "Downloading".to_string();
                     }
-                    
                     emit_update = true;
                 }
             }
@@ -370,8 +361,6 @@ pub async fn run_download_process(
                 output_path: filename,
             });
         } else {
-            // Fallback: if success but no filename captured, it might be a short file or logic error
-            // But since exit code is 0, we treat as success if we can't find path.
             manager_lock.update_job_status(job_id, JobStatus::Completed).ok();
             let _ = app_handle.emit_all("download-complete", DownloadCompletePayload {
                 job_id,

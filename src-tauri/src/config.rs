@@ -28,15 +28,13 @@ impl Default for WindowConfig {
 pub struct GeneralConfig {
     pub download_path: Option<String>,
     pub filename_template: String,
-    // We store the raw blocks JSON string to reconstruct the UI editor exactly,
-    // while `filename_template` is the compiled string for yt-dlp.
     pub template_blocks_json: Option<String>, 
 }
 
 impl Default for GeneralConfig {
     fn default() -> Self {
         Self {
-            download_path: None, // Defaults to system Downloads
+            download_path: None, 
             filename_template: "%(title)s.%(ext)s".to_string(),
             template_blocks_json: None,
         }
@@ -47,6 +45,7 @@ impl Default for GeneralConfig {
 pub struct PreferenceConfig {
     pub mode: String, // "video" | "audio"
     pub format_preset: String,
+    pub video_resolution: String, // NEW: "best", "2160p", "1440p", "1080p", etc.
     pub embed_metadata: bool,
     pub embed_thumbnail: bool,
 }
@@ -56,6 +55,7 @@ impl Default for PreferenceConfig {
         Self {
             mode: "video".to_string(),
             format_preset: "best".to_string(),
+            video_resolution: "best".to_string(),
             embed_metadata: false,
             embed_thumbnail: false,
         }
@@ -92,7 +92,6 @@ impl ConfigManager {
         let config_dir = home.join(".multiyt-dlp");
         let file_path = config_dir.join("config.json");
 
-        // Ensure directory exists
         if !config_dir.exists() {
             let _ = fs::create_dir_all(&config_dir);
         }
@@ -115,7 +114,6 @@ impl ConfigManager {
             Ok(cfg) => Some(cfg),
             Err(e) => {
                 println!("Error parsing config.json: {}. Using defaults.", e);
-                // Optionally back up the corrupt file
                 let _ = fs::rename(path, path.with_extension("json.bak"));
                 None
             }

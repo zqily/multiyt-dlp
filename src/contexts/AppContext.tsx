@@ -29,6 +29,7 @@ const DEFAULT_TEMPLATE_BLOCKS: TemplateBlock[] = [
 const DEFAULT_PREFS: PreferenceConfig = {
     mode: 'video',
     format_preset: 'best',
+    video_resolution: 'best', // NEW
     embed_metadata: false,
     embed_thumbnail: false
 };
@@ -60,7 +61,8 @@ export const AppProvider = ({ children }: { children: React.ReactNode }) => {
         }
 
         // Load Preferences
-        _setPreferences(config.preferences);
+        // Ensure defaults for new keys if loading old config
+        _setPreferences({ ...DEFAULT_PREFS, ...config.preferences });
         
       } catch (error) {
         console.error("Failed to load config:", error);

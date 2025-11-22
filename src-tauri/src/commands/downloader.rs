@@ -17,9 +17,10 @@ pub async fn start_download(
     url: String,
     download_path: Option<String>,
     format_preset: DownloadFormatPreset,
+    video_resolution: String, // NEW ARGUMENT
     embed_metadata: bool,
     embed_thumbnail: bool,
-    filename_template: String, // New argument
+    filename_template: String,
     app_handle: AppHandle,
     manager: State<'_, Arc<Mutex<JobManager>>>,
 ) -> Result<Uuid, AppError> {
@@ -28,12 +29,10 @@ pub async fn start_download(
         return Err(AppError::ValidationFailed("Invalid URL provided.".into()));
     }
 
-    // Sanitize template to prevent directory traversal or empty strings
+    // Sanitize template
     let safe_template = if filename_template.trim().is_empty() {
         "%(title)s.%(ext)s".to_string()
     } else {
-        // Basic check to ensure user doesn't try to traverse directories in the filename template
-        // e.g., "../../../secret.txt"
         if filename_template.contains("..") || filename_template.starts_with("/") || filename_template.starts_with("\\") {
              return Err(AppError::ValidationFailed("Invalid characters in filename template.".into()));
         }
@@ -46,17 +45,18 @@ pub async fn start_download(
     // Add job to the manager
     manager.lock().unwrap().add_job(job_id, job)?;
 
-    // Spawn the download process in a separate async task
+    // Spawn the download process
     let manager_clone = manager.inner().clone();
     tokio::spawn(async move {
         run_download_process(
             job_id, 
             url, 
             download_path, 
-            format_preset, 
+            format_preset,
+            video_resolution, // Pass to process
             embed_metadata,
             embed_thumbnail, 
-            safe_template, // Pass to process
+            safe_template, 
             app_handle, 
             manager_clone
         ).await;
@@ -90,11 +90,9 @@ pub fn cancel_download(
 
         #[cfg(windows)]
         {
-            // On Windows, we use taskkill to terminate the process tree.
-            // /F for force, /T for tree (kills child processes).
             let status = std::process::Command::new("taskkill")
                 .args(&["/F", "/T", "/PID", &pid.to_string()])
-                .stdout(std::process::Stdio::null()) // Hide output
+                .stdout(std::process::Stdio::null()) 
                 .stderr(std::process::Stdio::null())
                 .status();
 
