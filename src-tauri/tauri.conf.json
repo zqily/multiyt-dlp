@@ -8,7 +8,7 @@
   },
   "package": {
     "productName": "Multiyt-dlp",
-    "version": "0.1.0"
+    "version": "1.0.0"
   },
   "tauri": {
     "allowlist": {
@@ -58,7 +58,7 @@
     "bundle": {
       "active": true,
       "targets": "all",
-      "identifier": "com.tauri.yt-dlp-gui",
+      "identifier": "net.zqil.multiyt-dlp",
       "icon": [
         "icons/32x32.png",
         "icons/128x128.png",

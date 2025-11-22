@@ -97,7 +97,7 @@ export function AboutSettings() {
                     <div className="flex items-center gap-2 mt-1">
                         <span className="text-xs font-mono text-zinc-500">v{appVersion}</span>
                         <span className="px-1.5 py-0.5 text-[9px] bg-theme-cyan/10 text-theme-cyan border border-theme-cyan/20 rounded uppercase font-bold tracking-wider">
-                            Beta
+                            Stable
                         </span>
                     </div>
                 </div>
