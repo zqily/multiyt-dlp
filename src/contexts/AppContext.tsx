@@ -38,6 +38,8 @@ const DEFAULT_TEMPLATE_BLOCKS: TemplateBlock[] = [
 const DEFAULT_PREFS: PreferenceConfig = {
     mode: 'video',
     format_preset: 'best',
+    video_preset: 'best',        // Default logic: best
+    audio_preset: 'audio_best',  // Default logic: audio_best
     video_resolution: 'best',
     embed_metadata: false,
     embed_thumbnail: false
@@ -81,6 +83,7 @@ export const AppProvider = ({ children }: { children: React.ReactNode }) => {
         }
 
         // Load Preferences
+        // Use spread to ensure new fields in DEFAULT_PREFS are present even if config.json is old
         _setPreferences({ ...DEFAULT_PREFS, ...config.preferences });
         
         // Check Dependencies for Runtime Warning (Silently)

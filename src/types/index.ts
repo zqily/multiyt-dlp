@@ -13,6 +13,8 @@ export interface GeneralConfig {
 export interface PreferenceConfig {
   mode: string;
   format_preset: string;
+  video_preset: string; // NEW
+  audio_preset: string; // NEW
   video_resolution: string; 
   embed_metadata: boolean;
   embed_thumbnail: boolean;

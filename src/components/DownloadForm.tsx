@@ -3,7 +3,7 @@ import { Button } from './ui/Button';
 import { Card, CardContent } from './ui/Card';
 import { Download, FolderOpen, Link2, MonitorPlay, Headphones, FileText, Image as ImageIcon, AlertTriangle, Loader2 } from 'lucide-react';
 import { selectDirectory, expandPlaylist } from '@/api/invoke';
-import { DownloadFormatPreset } from '@/types';
+import { DownloadFormatPreset, PreferenceConfig } from '@/types';
 import { useAppContext } from '@/contexts/AppContext';
 import { twMerge } from 'tailwind-merge';
 
@@ -113,7 +113,6 @@ export function DownloadForm({ onDownload }: DownloadFormProps) {
         const template = getTemplateString();
         
         // Loop through results and queue them
-        // The backend queue handles concurrency, so we can fire these rapidly
         for (const entry of expanded.entries) {
             onDownload(
                 entry.url, 
@@ -147,14 +146,30 @@ export function DownloadForm({ onDownload }: DownloadFormProps) {
   };
   
   const handleModeChange = (newMode: DownloadMode) => {
-    let newPreset = preferences.format_preset;
-    if (newMode === 'video' && preferences.format_preset.startsWith('audio')) {
-        newPreset = 'best';
-    } else if (newMode === 'audio' && !preferences.format_preset.startsWith('audio')) {
-        newPreset = 'audio_best';
+    // When switching modes, retrieve the saved preset for that specific mode
+    // If not found (old config), fallback to defaults
+    let targetPreset = '';
+    
+    if (newMode === 'video') {
+        targetPreset = preferences.video_preset || 'best';
+    } else {
+        targetPreset = preferences.audio_preset || 'audio_best';
     }
 
-    updatePreferences({ mode: newMode, format_preset: newPreset });
+    updatePreferences({ mode: newMode, format_preset: targetPreset });
+  };
+
+  const handlePresetChange = (newValue: string) => {
+      const updates: Partial<PreferenceConfig> = { format_preset: newValue };
+      
+      // Update the persistent storage for the current mode
+      if (currentMode === 'video') {
+          updates.video_preset = newValue;
+      } else {
+          updates.audio_preset = newValue;
+      }
+      
+      updatePreferences(updates);
   };
 
   const isValidUrl = url.startsWith('http://') || url.startsWith('https://');
@@ -227,7 +242,7 @@ export function DownloadForm({ onDownload }: DownloadFormProps) {
                          <div className="flex-1">
                             <select
                                 value={preferences.format_preset}
-                                onChange={(e) => updatePreferences({ format_preset: e.target.value })}
+                                onChange={(e) => handlePresetChange(e.target.value)}
                                 className="w-full bg-surfaceHighlight border border-border rounded-md px-3 py-2.5 text-sm text-zinc-300 focus:outline-none focus:ring-1 focus:ring-theme-cyan/50 focus:border-theme-cyan/50"
                             >
                                 {filteredPresets.map(p => (
