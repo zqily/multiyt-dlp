@@ -3,6 +3,9 @@
 
 use std::sync::{Arc, Mutex};
 use tauri::{Manager, WindowEvent};
+use tokio::sync::mpsc;
+use std::time::Duration;
+
 use crate::core::manager::JobManager;
 use crate::config::ConfigManager;
 use crate::core::logging::LogManager;
@@ -24,11 +27,16 @@ fn main() {
 
     let config_manager_setup = config_manager.clone();
     let config_manager_event = config_manager.clone();
+    let config_manager_saver = config_manager.clone();
+
+    // 3. Setup Channel for Debounced Saving
+    // This prevents the UI thread from blocking on File I/O during resize events
+    let (tx_save, mut rx_save) = mpsc::unbounded_channel::<()>();
 
     tauri::Builder::default()
         .manage(job_manager)
         .manage(config_manager)
-        .manage(log_manager) // 3. Manage Log Manager State
+        .manage(log_manager)
         .setup(move |app| {
             let main_window = app.get_window("main").unwrap();
             let config = config_manager_setup.get_config();
@@ -42,8 +50,23 @@ fn main() {
                 y: config.window.y as i32,
             }));
             
-            // Example log
             tracing::info!("Application startup complete. Window initialized.");
+
+            // Spawn Background Saver Task
+            tauri::async_runtime::spawn(async move {
+                while let Some(_) = rx_save.recv().await {
+                    // Clear queue (throttle)
+                    while let Ok(_) = rx_save.try_recv() {}
+
+                    // Debounce delay (wait for movement to stop)
+                    tokio::time::sleep(Duration::from_millis(500)).await;
+
+                    // Save to disk
+                    if let Err(e) = config_manager_saver.save() {
+                        tracing::error!("Failed to auto-save window config: {}", e);
+                    }
+                }
+            });
 
             Ok(())
         })
@@ -62,20 +85,31 @@ fn main() {
                 }
             }
 
+            // Window Move Event
             if let WindowEvent::Moved(pos) = event.event() {
                 let mut current_config = config_manager_event.get_config();
                 current_config.window.x = pos.x as f64;
                 current_config.window.y = pos.y as f64;
+                
+                // Update memory only (Fast)
                 config_manager_event.update_window(current_config.window);
-                let _ = config_manager_event.save();
+                
+                // Signal background saver
+                let _ = tx_save.send(());
             }
+            
+            // Window Resize Event
             if let WindowEvent::Resized(size) = event.event() {
                 if size.width > 0 && size.height > 0 {
                     let mut current_config = config_manager_event.get_config();
                     current_config.window.width = size.width as f64;
                     current_config.window.height = size.height as f64;
+                    
+                    // Update memory only (Fast)
                     config_manager_event.update_window(current_config.window);
-                    let _ = config_manager_event.save();
+                    
+                    // Signal background saver
+                    let _ = tx_save.send(());
                 }
             }
         })

@@ -128,9 +128,11 @@ impl ConfigManager {
     }
 
     pub fn save(&self) -> Result<(), String> {
-        let config = self.config.lock().unwrap();
-        let json = serde_json::to_string_pretty(&*config)
-            .map_err(|e| format!("Serialization error: {}", e))?;
+        let json = {
+            let config = self.config.lock().unwrap();
+            serde_json::to_string_pretty(&*config)
+                .map_err(|e| format!("Serialization error: {}", e))?
+        };
         
         fs::write(&self.file_path, json)
             .map_err(|e| format!("Failed to write config file: {}", e))
