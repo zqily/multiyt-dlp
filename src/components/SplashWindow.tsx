@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { checkDependencies, closeSplash, openExternalLink } from '@/api/invoke';
+import { checkDependencies, openExternalLink, closeSplash } from '@/api/invoke';
 import icon from '@/assets/icon.png';
 import { RefreshCw, ExternalLink, Check } from 'lucide-react';
 import { Button } from './ui/Button';
@@ -12,7 +12,6 @@ export function SplashWindow() {
   const [message, setMessage] = useState('Initializing Core...');
   const [missingDeps, setMissingDeps] = useState<{ yt_dlp: boolean; ffmpeg: boolean }>({ yt_dlp: false, ffmpeg: false });
   
-  // Ref to prevent StrictMode double-invocation in dev
   const hasRun = useRef(false);
 
   const runChecks = async () => {
@@ -23,16 +22,18 @@ export function SplashWindow() {
     setMessage('Scanning System Environment...');
     
     try {
-      // Artificial delay to show off the fancy animation
       await new Promise(resolve => setTimeout(resolve, 1500));
 
       const deps = await checkDependencies();
-      const criticalMissing = !deps.yt_dlp || !deps.ffmpeg;
+      
+      // Updated check logic for new object structure
+      const ytMissing = !deps.yt_dlp.available;
+      const ffmpegMissing = !deps.ffmpeg.available;
 
-      if (criticalMissing) {
+      if (ytMissing || ffmpegMissing) {
         setMissingDeps({
-          yt_dlp: !deps.yt_dlp,
-          ffmpeg: !deps.ffmpeg
+          yt_dlp: ytMissing,
+          ffmpeg: ffmpegMissing
         });
         setStatus('error');
         setMessage('Critical Components Missing');
@@ -61,11 +62,9 @@ export function SplashWindow() {
 
   return (
     <div className="h-screen w-screen bg-zinc-950 flex flex-col items-center justify-center relative overflow-hidden border-2 border-zinc-900 cursor-default select-none">
-      {/* Background Grid Effect */}
       <div className="absolute inset-0 bg-[linear-gradient(rgba(18,18,18,0)_1px,transparent_1px),linear-gradient(90deg,rgba(18,18,18,0)_1px,transparent_1px)] bg-[size:40px_40px] [mask-image:radial-gradient(ellipse_80%_50%_at_50%_50%,black,transparent)] pointer-events-none" />
 
       <div className="z-10 flex flex-col items-center w-full max-w-[320px]">
-        {/* Glitch Logo Container */}
         <div className="glitch-wrapper mb-8">
             <div 
                 className="glitch-logo" 
@@ -73,7 +72,6 @@ export function SplashWindow() {
             />
         </div>
 
-        {/* Status Text */}
         <div className="text-center space-y-2 mb-6">
             <h1 className={`font-mono font-bold text-lg tracking-wider uppercase transition-colors duration-300 ${
                 status === 'error' ? 'text-theme-red' : 'text-theme-cyan'
@@ -83,7 +81,6 @@ export function SplashWindow() {
             <p className="text-zinc-500 text-xs font-medium">{message}</p>
         </div>
 
-        {/* Error Handling UI */}
         {status === 'error' && (
             <div className="w-full space-y-3 animate-fade-in bg-black/50 p-4 rounded-lg border border-zinc-800 backdrop-blur-sm">
                 <div className="space-y-2">
@@ -115,7 +112,6 @@ export function SplashWindow() {
             </div>
         )}
 
-        {/* Progress Bar (Fake Loader) */}
         {status === 'loading' && (
             <div className="w-32 h-1 bg-zinc-900 rounded-full overflow-hidden">
                 <div className="h-full bg-theme-cyan animate-[shimmer_1s_infinite_linear] w-full origin-left scale-x-50" />
@@ -123,7 +119,6 @@ export function SplashWindow() {
         )}
       </div>
       
-      {/* Version footer */}
       <div className="absolute bottom-4 text-[10px] text-zinc-700 font-mono">
          v0.1.0-alpha
       </div>

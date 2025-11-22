@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { TemplateBlock, PreferenceConfig } from '@/types';
-import { getAppConfig, saveGeneralConfig, savePreferenceConfig } from '@/api/invoke';
+import { getAppConfig, saveGeneralConfig, savePreferenceConfig, checkDependencies } from '@/api/invoke';
 
 interface AppContextType {
   // State
@@ -54,7 +54,6 @@ export const AppProvider = ({ children }: { children: React.ReactNode }) => {
   const [maxConcurrentDownloads, _setMaxConcurrentDownloads] = useState(4);
   const [maxTotalInstances, _setMaxTotalInstances] = useState(10);
 
-  // 1. Load Config on Mount
   useEffect(() => {
     const load = async () => {
       try {
@@ -63,7 +62,6 @@ export const AppProvider = ({ children }: { children: React.ReactNode }) => {
         // Load General
         if (config.general.download_path) _setDownloadPath(config.general.download_path);
         
-        // Load Concurrency limits
         _setMaxConcurrentDownloads(config.general.max_concurrent_downloads);
         _setMaxTotalInstances(config.general.max_total_instances);
 
@@ -77,6 +75,12 @@ export const AppProvider = ({ children }: { children: React.ReactNode }) => {
         // Load Preferences
         _setPreferences({ ...DEFAULT_PREFS, ...config.preferences });
         
+        // Check Dependencies for Runtime Warning (Silently)
+        const deps = await checkDependencies();
+        if (!deps.js_runtime.available) {
+            setIsJsRuntimeMissing(true);
+        }
+
       } catch (error) {
         console.error("Failed to load config:", error);
       } finally {
@@ -86,7 +90,6 @@ export const AppProvider = ({ children }: { children: React.ReactNode }) => {
     load();
   }, []);
 
-  // Helper to compile template
   const getTemplateString = useCallback((blocks?: TemplateBlock[]) => {
     const target = blocks || filenameTemplateBlocks;
     return target.map(block => {
@@ -96,9 +99,6 @@ export const AppProvider = ({ children }: { children: React.ReactNode }) => {
         return block.value;
     }).join('');
   }, [filenameTemplateBlocks]);
-
-
-  // --- Saving Logic Wrappers ---
 
   const setDefaultDownloadPath = (path: string) => {
     _setDownloadPath(path);
@@ -148,12 +148,10 @@ export const AppProvider = ({ children }: { children: React.ReactNode }) => {
     setDefaultDownloadPath,
     filenameTemplateBlocks,
     setFilenameTemplateBlocks,
-    getTemplateString, // Passed without wrapper to allow optional arg
-    
+    getTemplateString,
     maxConcurrentDownloads,
     maxTotalInstances,
     setConcurrency,
-
     preferences,
     updatePreferences
   };

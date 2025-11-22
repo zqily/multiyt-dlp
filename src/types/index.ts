@@ -4,7 +4,6 @@ export interface GeneralConfig {
   download_path: string | null;
   filename_template: string;
   template_blocks_json: string | null;
-  // NEW
   max_concurrent_downloads: number;
   max_total_instances: number;
 }
@@ -30,13 +29,22 @@ export interface AppConfig {
   window: WindowConfig;
 }
 
-// ... (Keep existing AppDependencies, AppError, etc.) ...
+// --- Dependencies Types ---
+
+export interface DependencyInfo {
+    name: string;
+    available: boolean;
+    version: string | null;
+    path: string | null;
+}
 
 export interface AppDependencies {
-  yt_dlp: boolean;
-  ffmpeg: boolean;
-  js_runtime: boolean;
+  yt_dlp: DependencyInfo;
+  ffmpeg: DependencyInfo;
+  js_runtime: DependencyInfo;
 }
+
+// ... (Keep existing AppError, Download types etc.) ...
 
 export type AppError = {
   IoError?: string;
@@ -97,11 +105,10 @@ export type TemplateBlockType = 'variable' | 'separator' | 'text';
 export interface TemplateBlock {
   id: string;
   type: TemplateBlockType;
-  value: string; // The yt-dlp string (e.g., "title" or ".")
-  label: string; // Display name (e.g., "Title" or ".")
+  value: string; 
+  label: string; 
 }
 
-// NEW
 export interface PlaylistEntry {
     id?: string;
     url: string;

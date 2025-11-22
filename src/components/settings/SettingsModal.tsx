@@ -3,7 +3,8 @@ import { Modal } from '../ui/Modal';
 import { useAppContext } from '@/contexts/AppContext';
 import { TemplateEditor } from './TemplateEditor';
 import { GeneralSettings } from './GeneralSettings';
-import { Settings, FileType } from 'lucide-react';
+import { AboutSettings } from './AboutSettings';
+import { Settings, FileType, Info } from 'lucide-react';
 
 interface SettingsModalProps {
     isOpen: boolean;
@@ -15,7 +16,7 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
     const [activeTab, setActiveTab] = React.useState('general');
 
     return (
-        <Modal isOpen={isOpen} onClose={onClose} title="Preferences">
+        <Modal isOpen={isOpen} onClose={onClose} title="Settings">
             <div className="flex flex-col md:flex-row gap-6">
                 {/* Sidebar Navigation */}
                 <nav className="w-full md:w-48 flex-shrink-0 space-y-1">
@@ -41,10 +42,21 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
                         <FileType className="h-4 w-4" />
                         Filename Template
                     </button>
+                    <button
+                        onClick={() => setActiveTab('about')}
+                        className={`w-full flex items-center gap-3 px-3 py-2 rounded-md text-sm font-medium transition-colors ${
+                            activeTab === 'about' 
+                                ? 'bg-theme-cyan/10 text-theme-cyan' 
+                                : 'text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800'
+                        }`}
+                    >
+                        <Info className="h-4 w-4" />
+                        About
+                    </button>
                 </nav>
 
                 {/* Content Area */}
-                <div className="flex-1 min-w-0">
+                <div className="flex-1 min-w-0 min-h-[400px]">
                     {activeTab === 'general' && (
                         <GeneralSettings />
                     )}
@@ -63,6 +75,9 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
                                 onChange={setFilenameTemplateBlocks} 
                             />
                         </div>
+                    )}
+                    {activeTab === 'about' && (
+                        <AboutSettings />
                     )}
                 </div>
             </div>

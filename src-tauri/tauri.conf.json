@@ -7,7 +7,7 @@
     "withGlobalTauri": true
   },
   "package": {
-    "productName": "yt-dlp-gui",
+    "productName": "Multiyt-dlp",
     "version": "0.1.0"
   },
   "tauri": {
