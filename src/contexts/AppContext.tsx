@@ -13,9 +13,9 @@ interface AppContextType {
   setDefaultDownloadPath: (path: string) => void;
   filenameTemplateBlocks: TemplateBlock[];
   setFilenameTemplateBlocks: (blocks: TemplateBlock[]) => void;
-  getTemplateString: () => string;
+  getTemplateString: (blocks?: TemplateBlock[]) => string;
   
-  // Concurrency (Added this)
+  // Concurrency
   maxConcurrentDownloads: number;
   maxTotalInstances: number;
   setConcurrency: (concurrent: number, total: number) => void;
@@ -50,7 +50,7 @@ export const AppProvider = ({ children }: { children: React.ReactNode }) => {
   const [filenameTemplateBlocks, _setTemplateBlocks] = useState<TemplateBlock[]>(DEFAULT_TEMPLATE_BLOCKS);
   const [preferences, _setPreferences] = useState<PreferenceConfig>(DEFAULT_PREFS);
   
-  // New Concurrency State
+  // Concurrency State
   const [maxConcurrentDownloads, _setMaxConcurrentDownloads] = useState(4);
   const [maxTotalInstances, _setMaxTotalInstances] = useState(10);
 
@@ -106,10 +106,9 @@ export const AppProvider = ({ children }: { children: React.ReactNode }) => {
         download_path: path,
         filename_template: getTemplateString(),
         template_blocks_json: JSON.stringify(filenameTemplateBlocks),
-        // Fix: Include the numbers so Serde doesn't fail
         max_concurrent_downloads: maxConcurrentDownloads,
         max_total_instances: maxTotalInstances
-    });
+    }).catch(e => console.error("Failed to save download path:", e));
   };
 
   const setFilenameTemplateBlocks = (blocks: TemplateBlock[]) => {
@@ -118,13 +117,11 @@ export const AppProvider = ({ children }: { children: React.ReactNode }) => {
         download_path: defaultDownloadPath,
         filename_template: getTemplateString(blocks),
         template_blocks_json: JSON.stringify(blocks),
-        // Fix: Include the numbers here too
         max_concurrent_downloads: maxConcurrentDownloads,
         max_total_instances: maxTotalInstances
-    });
+    }).catch(e => console.error("Failed to save template:", e));
   };
 
-  // New Function to handle concurrency updates
   const setConcurrency = (concurrent: number, total: number) => {
     _setMaxConcurrentDownloads(concurrent);
     _setMaxTotalInstances(total);
@@ -134,13 +131,13 @@ export const AppProvider = ({ children }: { children: React.ReactNode }) => {
         template_blocks_json: JSON.stringify(filenameTemplateBlocks),
         max_concurrent_downloads: concurrent,
         max_total_instances: total
-    });
+    }).catch(e => console.error("Failed to save concurrency:", e));
   };
 
   const updatePreferences = (updates: Partial<PreferenceConfig>) => {
       const newPrefs = { ...preferences, ...updates };
       _setPreferences(newPrefs);
-      savePreferenceConfig(newPrefs);
+      savePreferenceConfig(newPrefs).catch(e => console.error("Failed to save preferences:", e));
   };
 
   const value = {
@@ -151,7 +148,7 @@ export const AppProvider = ({ children }: { children: React.ReactNode }) => {
     setDefaultDownloadPath,
     filenameTemplateBlocks,
     setFilenameTemplateBlocks,
-    getTemplateString: () => getTemplateString(),
+    getTemplateString, // Passed without wrapper to allow optional arg
     
     maxConcurrentDownloads,
     maxTotalInstances,
