@@ -32,7 +32,13 @@ export function DownloadItem({ download, onCancel }: DownloadItemProps) {
   };
 
   // Determine if we are in a post-processing phase
-  const isProcessingPhase = phase?.includes('Merging') || phase?.includes('Extracting') || phase?.includes('Fixing');
+  // Includes "Starting" and "Initializing" so the bar shows activity while yt-dlp starts up
+  const isProcessingPhase = phase?.includes('Merging') 
+    || phase?.includes('Extracting') 
+    || phase?.includes('Fixing')
+    || phase?.includes('Starting')
+    || phase?.includes('Initializing');
+
   const isMetaPhase = phase?.includes('Metadata') || phase?.includes('Thumbnail');
 
   const getIcon = () => {

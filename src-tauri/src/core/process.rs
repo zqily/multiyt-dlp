@@ -162,6 +162,18 @@ pub async fn run_download_process(
         return;
     }
 
+    // --- FIX: IMMEDIATE NOTIFICATION ---
+    // Notify frontend immediately that process exists, forcing UI state from Queued -> Active
+    let _ = app_handle.emit_all("download-progress", DownloadProgressPayload {
+        job_id,
+        percentage: 0.0,
+        speed: "Starting...".to_string(),
+        eta: "Calculating...".to_string(),
+        filename: None,
+        phase: Some("Initializing Process...".to_string()),
+    });
+    // -----------------------------------
+
     // --- Output Handling & Phase Detection ---
     let stdout = child.stdout.take().expect("Failed to capture stdout");
     let stderr = child.stderr.take().expect("Failed to capture stderr");
