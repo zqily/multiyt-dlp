@@ -22,11 +22,12 @@ export function SplashWindow() {
     setMessage('Scanning System Environment...');
     
     try {
+      // Artificial delay to ensure the splash screen is readable/visible
+      // and to allow any final CSS animations to settle
       await new Promise(resolve => setTimeout(resolve, 1500));
 
       const deps = await checkDependencies();
       
-      // Updated check logic for new object structure
       const ytMissing = !deps.yt_dlp.available;
       const ffmpegMissing = !deps.ffmpeg.available;
 
@@ -57,7 +58,26 @@ export function SplashWindow() {
   };
 
   useEffect(() => {
-    runChecks();
+    // FIX: Explicitly preload the icon image before starting backend checks.
+    // This prevents the "white box" issue where logic runs before the image paints.
+    const img = new Image();
+    img.src = icon;
+
+    const startApp = () => {
+        // requestAnimationFrame gives the browser one clear frame to paint 
+        // the background image before the JS thread gets busy.
+        requestAnimationFrame(() => {
+            runChecks();
+        });
+    };
+
+    // Check if already cached, otherwise wait for load
+    if (img.complete) {
+        startApp();
+    } else {
+        img.onload = startApp;
+        img.onerror = startApp; // Fallback: run anyway if image fails
+    }
   }, []);
 
   return (

@@ -23,8 +23,6 @@ pub struct LogManager {
 impl LogManager {
     pub fn init(log_level: &str) -> Self {
         // 1. Determine Log Directory
-        // In a real scenario, we might use tauri::api::path, but since this is init,
-        // we'll use the dirs crate to find a standard location.
         let home = dirs::home_dir().expect("Could not find home directory");
         let log_dir = home.join(".multiyt-dlp").join("logs");
         
@@ -52,10 +50,11 @@ impl LogManager {
             .with_writer(std::io::stdout);
 
         // 4. Filter (Reloadable)
-        // We wrap the EnvFilter in a reload layer.
-        // This filter will apply to ALL layers (global toggle).
-        let initial_filter = EnvFilter::try_new(log_level)
-            .unwrap_or_else(|_| EnvFilter::new("info"));
+        // We construct a filter that applies the user's level globally,
+        // but explicitly silences noisy third-party crates (tao, wry) to ERROR only.
+        let filter_str = Self::get_filter_string(log_level);
+        let initial_filter = EnvFilter::try_new(&filter_str)
+            .unwrap_or_else(|_| EnvFilter::new(Self::get_filter_string("info")));
             
         let (filter_layer, reload_handle) = reload::Layer::new(initial_filter);
 
@@ -76,13 +75,23 @@ impl LogManager {
     }
 
     pub fn set_level(&self, level: &str) -> Result<(), String> {
-        let new_filter = EnvFilter::try_new(level)
-            .map_err(|e| format!("Invalid log level '{}': {}", level, e))?;
+        let filter_str = Self::get_filter_string(level);
+        let new_filter = EnvFilter::try_new(&filter_str)
+            .map_err(|e| format!("Invalid log level '{}': {}", filter_str, e))?;
         
         self.reload_handle.reload(new_filter)
             .map_err(|e| format!("Failed to reload log level: {}", e))?;
             
         info!("Log level dynamically changed to: {}", level);
         Ok(())
+    }
+
+    /// Helper to construct a filter string that silences dependencies
+    fn get_filter_string(level: &str) -> String {
+        // "info,tao=error,wry=error" means:
+        // - Default global level is INFO
+        // - crate 'tao' is restricted to ERROR
+        // - crate 'wry' is restricted to ERROR
+        format!("{},tao=error,wry=error", level)
     }
 }

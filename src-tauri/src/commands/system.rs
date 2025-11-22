@@ -68,44 +68,53 @@ fn resolve_binary_info(bin_name: &str, version_flag: &str) -> DependencyInfo {
 }
 
 #[tauri::command]
-pub fn check_dependencies() -> AppDependencies {
-    // 1. yt-dlp
-    let yt_dlp = resolve_binary_info("yt-dlp", "--version");
+pub async fn check_dependencies() -> AppDependencies {
+    tauri::async_runtime::spawn_blocking(|| {
+        // 1. yt-dlp
+        let yt_dlp = resolve_binary_info("yt-dlp", "--version");
 
-    // 2. ffmpeg
-    let mut ffmpeg = resolve_binary_info("ffmpeg", "-version");
-    if let Some(ref v) = ffmpeg.version {
-        let re = Regex::new(r"ffmpeg version ([^\s]+)").unwrap();
-        if let Some(caps) = re.captures(v) {
-            ffmpeg.version = Some(caps[1].to_string());
-        }
-    }
-
-    // 3. JS Runtime
-    let mut js_runtime = DependencyInfo { 
-        name: "None".to_string(), available: false, version: None, path: None 
-    };
-
-    let runtimes = [("deno", "--version"), ("node", "--version"), ("bun", "--version")];
-    
-    for (bin, flag) in runtimes {
-        let info = resolve_binary_info(bin, flag);
-        if info.available {
-            js_runtime = info;
-            if bin == "deno" {
-                 if let Some(ref v) = js_runtime.version {
-                     js_runtime.version = Some(v.replace("deno ", ""));
-                 }
+        // 2. ffmpeg
+        let mut ffmpeg = resolve_binary_info("ffmpeg", "-version");
+        if let Some(ref v) = ffmpeg.version {
+            let re = Regex::new(r"ffmpeg version ([^\s]+)").unwrap();
+            if let Some(caps) = re.captures(v) {
+                ffmpeg.version = Some(caps[1].to_string());
             }
-            break;
         }
-    }
 
-    AppDependencies {
-        yt_dlp,
-        ffmpeg,
-        js_runtime,
-    }
+        // 3. JS Runtime
+        let mut js_runtime = DependencyInfo { 
+            name: "None".to_string(), available: false, version: None, path: None 
+        };
+
+        let runtimes = [("deno", "--version"), ("node", "--version"), ("bun", "--version")];
+        
+        for (bin, flag) in runtimes {
+            let info = resolve_binary_info(bin, flag);
+            if info.available {
+                js_runtime = info;
+                if bin == "deno" {
+                     if let Some(ref v) = js_runtime.version {
+                         js_runtime.version = Some(v.replace("deno ", ""));
+                     }
+                }
+                break;
+            }
+        }
+
+        AppDependencies {
+            yt_dlp,
+            ffmpeg,
+            js_runtime,
+        }
+    })
+    .await
+    .unwrap_or_else(|_| AppDependencies {
+        // Fallback in unlikely case of thread panic
+        yt_dlp: DependencyInfo { name: "yt-dlp".into(), available: false, version: None, path: None },
+        ffmpeg: DependencyInfo { name: "ffmpeg".into(), available: false, version: None, path: None },
+        js_runtime: DependencyInfo { name: "js".into(), available: false, version: None, path: None },
+    })
 }
 
 #[tauri::command]
