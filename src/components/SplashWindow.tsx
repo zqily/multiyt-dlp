@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { checkDependencies, openExternalLink, closeSplash } from '@/api/invoke';
+import { getVersion } from '@tauri-apps/api/app';
 import icon from '@/assets/icon.png';
 import { RefreshCw, ExternalLink, Check } from 'lucide-react';
 import { Button } from './ui/Button';
@@ -11,6 +12,7 @@ export function SplashWindow() {
   const [status, setStatus] = useState<'loading' | 'error' | 'ready'>('loading');
   const [message, setMessage] = useState('Initializing Core...');
   const [missingDeps, setMissingDeps] = useState<{ yt_dlp: boolean; ffmpeg: boolean }>({ yt_dlp: false, ffmpeg: false });
+  const [appVersion, setAppVersion] = useState('');
   
   const hasRun = useRef(false);
 
@@ -58,25 +60,24 @@ export function SplashWindow() {
   };
 
   useEffect(() => {
-    // FIX: Explicitly preload the icon image before starting backend checks.
-    // This prevents the "white box" issue where logic runs before the image paints.
+    // 1. Fetch Version dynamically
+    getVersion().then(v => setAppVersion(`v${v}`));
+
+    // 2. Preload Image & Start App
     const img = new Image();
     img.src = icon;
 
     const startApp = () => {
-        // requestAnimationFrame gives the browser one clear frame to paint 
-        // the background image before the JS thread gets busy.
         requestAnimationFrame(() => {
             runChecks();
         });
     };
 
-    // Check if already cached, otherwise wait for load
     if (img.complete) {
         startApp();
     } else {
         img.onload = startApp;
-        img.onerror = startApp; // Fallback: run anyway if image fails
+        img.onerror = startApp; 
     }
   }, []);
 
@@ -140,7 +141,7 @@ export function SplashWindow() {
       </div>
       
       <div className="absolute bottom-4 text-[10px] text-zinc-700 font-mono">
-         v0.1.0-alpha
+         {appVersion || '...'}
       </div>
     </div>
   );
