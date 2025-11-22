@@ -18,10 +18,26 @@ pub struct AppDependencies {
     pub js_runtime: DependencyInfo,
 }
 
+// Helper to create a command that doesn't spawn a visible window on Windows
+fn new_silent_command(program: &str) -> Command {
+    let mut cmd = Command::new(program);
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+    }
+    cmd
+}
+
 fn resolve_binary_info(bin_name: &str, version_flag: &str) -> DependencyInfo {
     // 1. Check Path
     let path_cmd = if cfg!(target_os = "windows") { "where" } else { "which" };
-    let path_output = Command::new(path_cmd).arg(bin_name).output().ok();
+    
+    // Use helper to keep it silent
+    let path_output = new_silent_command(path_cmd)
+        .arg(bin_name)
+        .output()
+        .ok();
     
     let path = path_output
         .filter(|o| o.status.success())
@@ -33,11 +49,10 @@ fn resolve_binary_info(bin_name: &str, version_flag: &str) -> DependencyInfo {
     // 2. Check Version if available
     let mut version = None;
     if available {
-        if let Ok(output) = Command::new(bin_name).arg(version_flag).output() {
+        // Use helper here too
+        if let Ok(output) = new_silent_command(bin_name).arg(version_flag).output() {
              if output.status.success() {
                  let out_str = String::from_utf8_lossy(&output.stdout).to_string();
-                 // Naive cleaning: take first line, split by space if needed
-                 // Specific logic for ffmpeg vs others
                  let first_line = out_str.lines().next().unwrap_or("").trim().to_string();
                  version = Some(first_line);
              }
@@ -57,17 +72,16 @@ pub fn check_dependencies() -> AppDependencies {
     // 1. yt-dlp
     let yt_dlp = resolve_binary_info("yt-dlp", "--version");
 
-    // 2. ffmpeg (Requires specific parsing as output is verbose)
+    // 2. ffmpeg
     let mut ffmpeg = resolve_binary_info("ffmpeg", "-version");
     if let Some(ref v) = ffmpeg.version {
-        // Extract just the version number from "ffmpeg version 6.0 ..."
         let re = Regex::new(r"ffmpeg version ([^\s]+)").unwrap();
         if let Some(caps) = re.captures(v) {
             ffmpeg.version = Some(caps[1].to_string());
         }
     }
 
-    // 3. JS Runtime (Try Deno -> Node -> Bun)
+    // 3. JS Runtime
     let mut js_runtime = DependencyInfo { 
         name: "None".to_string(), available: false, version: None, path: None 
     };
@@ -78,9 +92,7 @@ pub fn check_dependencies() -> AppDependencies {
         let info = resolve_binary_info(bin, flag);
         if info.available {
             js_runtime = info;
-            // Clean up version string if needed
             if bin == "deno" {
-                 // Deno outputs "deno x.x.x"
                  if let Some(ref v) = js_runtime.version {
                      js_runtime.version = Some(v.replace("deno ", ""));
                  }

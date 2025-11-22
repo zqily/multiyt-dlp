@@ -9,18 +9,22 @@ use crate::core::{
 };
 use crate::models::{DownloadFormatPreset, QueuedJob, PlaylistResult, PlaylistEntry, JobStatus};
 
-// New Command: Expand Playlist
 #[tauri::command]
 pub async fn expand_playlist(url: String) -> Result<PlaylistResult, AppError> {
-    // 1. Check if it's a playlist or video using --flat-playlist --dump-single-json
-    // This is much faster than full download and works for single videos too
-    let output = Command::new("yt-dlp")
-        .arg("--flat-playlist")
-        .arg("--dump-single-json")
-        .arg("--no-warnings")
-        .arg(&url)
-        .output()
-        .map_err(|e| AppError::IoError(e.to_string()))?;
+    let mut cmd = Command::new("yt-dlp");
+    cmd.arg("--flat-playlist")
+       .arg("--dump-single-json")
+       .arg("--no-warnings")
+       .arg(&url);
+
+    // SILENCE WINDOW ON WINDOWS
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x08000000);
+    }
+
+    let output = cmd.output().map_err(|e| AppError::IoError(e.to_string()))?;
 
     if !output.status.success() {
         return Err(AppError::ProcessFailed { 
@@ -35,7 +39,6 @@ pub async fn expand_playlist(url: String) -> Result<PlaylistResult, AppError> {
 
     let mut entries = Vec::new();
 
-    // Check if it has "entries" (Playlist) or is a single video
     if let Some(entries_arr) = parsed.get("entries").and_then(|e| e.as_array()) {
         for entry in entries_arr {
             if let Some(url) = entry.get("url").and_then(|s| s.as_str()) {
@@ -47,7 +50,6 @@ pub async fn expand_playlist(url: String) -> Result<PlaylistResult, AppError> {
             }
         }
     } else {
-        // Single Video
         entries.push(PlaylistEntry {
             id: parsed.get("id").and_then(|s| s.as_str()).map(|s| s.to_string()),
             url: parsed.get("webpage_url").and_then(|s| s.as_str()).unwrap_or(&url).to_string(),
@@ -71,12 +73,10 @@ pub async fn start_download(
     manager: State<'_, Arc<Mutex<JobManager>>>,
 ) -> Result<Uuid, AppError> {
     
-    // Basic validation
     if !url.starts_with("http://") && !url.starts_with("https://") {
         return Err(AppError::ValidationFailed("Invalid URL provided.".into()));
     }
 
-    // Sanitize template
     let safe_template = if filename_template.trim().is_empty() {
         "%(title)s.%(ext)s".to_string()
     } else {
@@ -88,7 +88,6 @@ pub async fn start_download(
 
     let job_id = Uuid::new_v4();
     
-    // Construct the Job Data object
     let job_data = QueuedJob {
         id: job_id,
         url: url.clone(),
@@ -100,7 +99,6 @@ pub async fn start_download(
         filename_template: safe_template,
     };
 
-    // Add job to the manager (which queues it and tries to spawn)
     manager.lock().unwrap().add_job(job_data, app_handle)?;
 
     Ok(job_id)
@@ -114,45 +112,39 @@ pub fn cancel_download(
     let mut manager = manager.lock().unwrap();
     
     if let Some(pid) = manager.get_job_pid(job_id) {
-        // Platform-specific process killing
         #[cfg(not(windows))]
         {
             use nix::sys::signal::{self, Signal};
             use nix::unistd::Pid;
             let pid_to_kill = Pid::from_raw(pid as i32);
             if let Err(e) = signal::kill(pid_to_kill, Signal::SIGINT) {
-                return Err(AppError::ProcessKillFailed(format!(
-                    "Failed to send SIGINT to PID {}: {}",
-                    pid, e
-                )));
+                return Err(AppError::ProcessKillFailed(format!("Failed to send SIGINT: {}", e)));
             }
         }
 
         #[cfg(windows)]
         {
-            let status = std::process::Command::new("taskkill")
-                .args(&["/F", "/T", "/PID", &pid.to_string()])
-                .stdout(std::process::Stdio::null()) 
-                .stderr(std::process::Stdio::null())
-                .status();
+            let mut cmd = std::process::Command::new("taskkill");
+            cmd.args(&["/F", "/T", "/PID", &pid.to_string()]);
+            cmd.stdout(std::process::Stdio::null());
+            cmd.stderr(std::process::Stdio::null());
+            
+            // SILENCE TASKKILL WINDOW
+            use std::os::windows::process::CommandExt;
+            cmd.creation_flags(0x08000000); 
+
+            let status = cmd.status();
             
             if let Err(e) = status {
-                 return Err(AppError::ProcessKillFailed(format!(
-                    "Failed to execute taskkill for PID {}: {}",
-                    pid, e
-                )));
+                 return Err(AppError::ProcessKillFailed(format!("Failed to execute taskkill: {}", e)));
             }
         }
         
         manager.update_job_status(job_id, JobStatus::Cancelled)?;
         Ok(())
     } else {
-        // If no PID, it might be in the queue (pending)
-        // Check if it exists in map
         if manager.get_job_status(job_id).is_some() {
              manager.update_job_status(job_id, JobStatus::Cancelled)?;
-             // Removing it from queue is hard with VecDeque without iteration, 
-             // but `process_queue` checks for Cancelled status before spawning.
              manager.remove_job(job_id); 
              Ok(())
         } else {
