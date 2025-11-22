@@ -52,14 +52,20 @@
 
 ## 📦 Installation
 
-### Prerequisites
-Multiyt-dlp is a GUI wrapper. To function, it requires the following binaries in your system `PATH`:
+### 📥 Pre-compiled Binaries (Windows Only)
+A standalone executable (`.exe`) is available for Windows users.
+👉 **[Download from Releases](../../releases)**
 
-1.  **yt-dlp**: [Download Here](https://github.com/yt-dlp/yt-dlp/releases)
-2.  **FFmpeg**: [Download Here](https://ffmpeg.org/download.html)
-3.  *(Optional)* **Node/Deno/Bun**: Used for downloading from YouTube.
+> **Note:** Compiling for macOS or Linux is not currently supported by the developer. Users on these platforms must **build from source** (see below).
 
-### Running form Source
+### 🔧 Prerequisites
+Regardless of whether you use the installer or build from source, **Multiyt-dlp requires these external tools** to function:
+
+1.  **yt-dlp**: [Download Here](https://github.com/yt-dlp/yt-dlp/releases) (Must be in your system PATH)
+2.  **FFmpeg**: [Download Here](https://ffmpeg.org/download.html) (Must be in your system PATH)
+3.  *(Optional)* **Node/Deno/Bun**: Recommended for downloading from YouTube.
+
+### 🏗️ Building from Source
 
 1.  **Clone the repository**
     ```bash
