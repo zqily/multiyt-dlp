@@ -8,9 +8,10 @@ interface DownloadGridItemProps {
 }
 
 export function DownloadGridItem({ download, onCancel }: DownloadGridItemProps) {
-  const { jobId, status, progress, error, phase, preset, embedThumbnail } = download;
+  const { jobId, status, progress, error, phase, preset, embedThumbnail, embedMetadata, filename, url } = download;
 
   const isAudio = preset?.startsWith('audio');
+  const displayTitle = filename || url;
   
   // State Flags
   const isQueued = status === 'pending';
@@ -55,10 +56,19 @@ export function DownloadGridItem({ download, onCancel }: DownloadGridItemProps) 
     return isAudio ? <Headphones className="h-6 w-6" /> : <MonitorPlay className="h-6 w-6" />;
   };
 
+  // Badge Logic
+  let badgeText = isAudio ? 'AUDIO' : 'VIDEO';
+  if (preset) {
+      const parts = preset.split('_');
+      if (parts.length > 1 && parts[1] !== 'best') {
+         badgeText = parts[1].toUpperCase();
+      }
+  }
+
   return (
     <div 
         className={twMerge(
-            "group relative h-24 w-full rounded-xl border bg-zinc-900/40 overflow-hidden transition-all duration-300 select-none flex items-center justify-center",
+            "group relative h-28 w-full rounded-xl border bg-zinc-900/40 overflow-hidden transition-all duration-300 select-none flex items-center justify-center",
             isActive ? getThemeColorClass() : "border-zinc-800 text-zinc-600",
             isQueued && "opacity-60 bg-zinc-900/20 border-zinc-800/60"
         )}
@@ -76,8 +86,8 @@ export function DownloadGridItem({ download, onCancel }: DownloadGridItemProps) 
             <div className="absolute inset-0 w-full h-full bg-[linear-gradient(45deg,transparent_25%,rgba(255,255,255,0.03)_25%,rgba(255,255,255,0.03)_50%,transparent_50%,transparent_75%,rgba(255,255,255,0.03)_75%,rgba(255,255,255,0.03)_100%)] bg-[length:20px_20px] animate-[progress-stripes_2s_linear_infinite] pointer-events-none" />
         )}
 
-        {/* Content Layer */}
-        <div className="z-10 relative flex flex-col items-center justify-center">
+        {/* Content Layer (Visible when NOT hovering) */}
+        <div className="z-10 relative flex flex-col items-center justify-center group-hover:opacity-0 transition-opacity duration-200">
             {isActive && !isProcessingPhase && !isMetaPhase ? (
                 // Show Percentage when actively downloading
                 <div className="flex flex-col items-center animate-fade-in">
@@ -88,30 +98,68 @@ export function DownloadGridItem({ download, onCancel }: DownloadGridItemProps) 
                 </div>
             ) : (
                 // Show Icon otherwise
-                <div className={twMerge("transition-transform duration-300 group-hover:scale-110", isActive && "animate-pulse")}>
+                <div className={twMerge("transition-transform duration-300", isActive && "animate-pulse")}>
                     <IconComponent />
                 </div>
             )}
         </div>
 
-        {/* Hover Overlay with Cancel/Info */}
-        {(isActive || isQueued || isError) && (
-            <div className="absolute inset-0 bg-black/80 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center z-20 backdrop-blur-[2px]">
-                {isError ? (
-                    <div className="px-2 text-[10px] text-center text-red-400 font-mono break-words w-full">
-                        {error?.substring(0, 40)}...
-                    </div>
-                ) : (
-                    <button 
-                        onClick={() => onCancel(jobId)}
-                        className="p-2 rounded-full bg-theme-red/10 text-theme-red hover:bg-theme-red hover:text-white transition-colors"
-                        title="Cancel Download"
-                    >
-                        <X className="h-5 w-5" />
-                    </button>
-                )}
+        {/* HOVER OVERLAY: Context Menu / Info */}
+        <div className="absolute inset-0 bg-zinc-950/90 backdrop-blur-sm opacity-0 group-hover:opacity-100 transition-all duration-200 z-20 flex flex-col p-3 text-left">
+            
+            {/* Top Right: Cancel Action */}
+            {(isActive || isQueued || isError) && (
+                <button 
+                    onClick={(e) => { e.stopPropagation(); onCancel(jobId); }}
+                    className="absolute top-2 right-2 p-1.5 rounded-full bg-zinc-800 hover:bg-theme-red hover:text-white text-zinc-400 transition-colors shadow-lg z-30"
+                    title="Cancel Download"
+                >
+                    <X className="h-3 w-3" />
+                </button>
+            )}
+
+            {/* Title */}
+            <div className="text-[10px] font-bold text-zinc-100 leading-tight line-clamp-2 pr-6 mb-auto break-all">
+                {displayTitle}
             </div>
-        )}
+
+            {/* Error Message specific display */}
+            {isError ? (
+                 <div className="text-[9px] text-red-400 font-mono leading-tight mt-1 line-clamp-3">
+                    {error}
+                 </div>
+            ) : (
+                <>
+                    {/* Badges */}
+                    <div className="flex flex-wrap gap-1 mt-2 mb-1">
+                        <span className={twMerge(
+                            "px-1 py-0.5 text-[9px] font-bold rounded uppercase",
+                            isAudio ? "bg-theme-red/20 text-theme-red" : "bg-theme-cyan/20 text-theme-cyan"
+                        )}>
+                            {badgeText}
+                        </span>
+                        {embedMetadata && (
+                             <span className="px-1 py-0.5 text-[9px] font-bold rounded bg-zinc-800 text-zinc-400" title="Tags">
+                                TAGS
+                             </span>
+                        )}
+                        {embedThumbnail && (
+                             <span className="px-1 py-0.5 text-[9px] font-bold rounded bg-zinc-800 text-zinc-400" title="Art">
+                                ART
+                             </span>
+                        )}
+                    </div>
+                    
+                    {/* Phase / Status Text */}
+                    <div className={twMerge(
+                        "text-[9px] font-mono truncate",
+                        (isProcessingPhase || isMetaPhase) ? "text-yellow-500" : "text-zinc-500"
+                    )}>
+                        {phase || status}
+                    </div>
+                </>
+            )}
+        </div>
     </div>
   );
 }

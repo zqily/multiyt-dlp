@@ -44,7 +44,7 @@ export function DownloadItem({ download, onCancel }: DownloadItemProps) {
   const getIcon = () => {
       if (isError) return <AlertCircle className="h-5 w-5 text-theme-red" />;
       if (isCompleted) return <CheckCircle2 className="h-5 w-5 text-theme-cyan" />;
-      if (isCancelled) return <X className="h-5 w-5 text-zinc-500" />;
+      if (isCancelled) return <X className="h-5 w-5 text-zinc-600" />;
       if (isQueued) return <Hourglass className="h-5 w-5 text-zinc-500 animate-pulse" />; // Distinct Icon for Queue
       
       if (isMetaPhase) return <Tags className="h-5 w-5 text-yellow-400 animate-pulse" />;
@@ -76,8 +76,10 @@ export function DownloadItem({ download, onCancel }: DownloadItemProps) {
         isError && "border-theme-red/30",
         // Styling for Queued (Pending) - Dormant look
         isQueued && "border-zinc-800/60 bg-zinc-900/30 opacity-80",
+        // Cancelled
+        isCancelled && "opacity-50 border-zinc-900 bg-zinc-950",
         // Default
-        (!isActive && !isError && !isQueued) && "border-border"
+        (!isActive && !isError && !isQueued && !isCancelled) && "border-border"
     )}>
       
       <div className="flex items-start gap-5">
@@ -87,7 +89,7 @@ export function DownloadItem({ download, onCancel }: DownloadItemProps) {
             isActive && (isProcessingPhase || isMetaPhase) && "bg-yellow-500/10 border-yellow-500/30",
             isActive && !isProcessingPhase && !isMetaPhase && isAudio && "bg-theme-red/5 border-theme-red/20",
             isActive && !isProcessingPhase && !isMetaPhase && !isAudio && "bg-theme-cyan/5 border-theme-cyan/20",
-            !isActive && "bg-zinc-900 border-zinc-800"
+            (!isActive || isCancelled) && "bg-zinc-900 border-zinc-800"
         )}>
           {getIcon()}
         </div>
@@ -98,30 +100,32 @@ export function DownloadItem({ download, onCancel }: DownloadItemProps) {
                  <div className="space-y-1 min-w-0">
                     <p className={twMerge(
                         "text-sm font-semibold truncate transition-colors",
-                        isActive ? "text-zinc-100" : "text-zinc-400"
+                        isCancelled ? "text-zinc-500 line-through" : (isActive ? "text-zinc-100" : "text-zinc-400")
                     )} title={displayTitle}>
                         {displayTitle}
                     </p>
                     <div className="flex items-center gap-2 text-[10px] uppercase tracking-wider font-bold">
                         {/* Format Badge */}
                         <span className={twMerge(
-                            "px-1.5 py-0.5 rounded border",
-                            isQueued 
-                                ? "border-zinc-700 text-zinc-600 bg-zinc-800" // Dim badge for queued
-                                : isAudio 
-                                    ? "border-theme-red/30 text-theme-red bg-theme-red/5" 
-                                    : "border-theme-cyan/30 text-theme-cyan bg-theme-cyan/5"
+                            "px-1.5 py-0.5 rounded border transition-colors",
+                            isCancelled
+                                ? "border-zinc-800 text-zinc-700 bg-zinc-900"
+                                : isQueued 
+                                    ? "border-zinc-700 text-zinc-600 bg-zinc-800" // Dim badge for queued
+                                    : isAudio 
+                                        ? "border-theme-red/30 text-theme-red bg-theme-red/5" 
+                                        : "border-theme-cyan/30 text-theme-cyan bg-theme-cyan/5"
                         )}>{badgeText}</span>
                         
                         {/* Extra Flags */}
                         {embedMetadata && (
-                             <span className="px-1.5 py-0.5 rounded border border-zinc-700 text-zinc-400 bg-zinc-800/50 flex items-center gap-1" title="Metadata Embedded">
+                             <span className={twMerge("px-1.5 py-0.5 rounded border flex items-center gap-1", isCancelled ? "border-zinc-800 text-zinc-700 bg-zinc-900" : "border-zinc-700 text-zinc-400 bg-zinc-800/50")} title="Metadata Embedded">
                                 <FileText className="h-3 w-3" /> TAGS
                              </span>
                         )}
                         
                         {embedThumbnail && (
-                             <span className="px-1.5 py-0.5 rounded border border-zinc-700 text-zinc-400 bg-zinc-800/50 flex items-center gap-1" title="Thumbnail Embedded">
+                             <span className={twMerge("px-1.5 py-0.5 rounded border flex items-center gap-1", isCancelled ? "border-zinc-800 text-zinc-700 bg-zinc-900" : "border-zinc-700 text-zinc-400 bg-zinc-800/50")} title="Thumbnail Embedded">
                                 <ImageIcon className="h-3 w-3" /> ART
                              </span>
                         )}
@@ -129,7 +133,7 @@ export function DownloadItem({ download, onCancel }: DownloadItemProps) {
                         {/* Phase / Status Text */}
                         <span className={twMerge(
                             "flex items-center gap-1 transition-colors duration-300 ml-1",
-                             (isProcessingPhase || isMetaPhase) ? "text-yellow-400" : "text-zinc-500"
+                             isCancelled ? "text-zinc-700" : (isProcessingPhase || isMetaPhase) ? "text-yellow-400" : "text-zinc-500"
                         )}>
                             {isActive && <Activity className={twMerge("h-3 w-3", (isProcessingPhase || isMetaPhase) && "animate-spin")} />}
                             
@@ -153,6 +157,11 @@ export function DownloadItem({ download, onCancel }: DownloadItemProps) {
                     {isQueued && (
                         <span className="text-xs font-bold text-zinc-600 uppercase bg-zinc-900 border border-zinc-800 px-2 py-1 rounded">
                             Queued
+                        </span>
+                    )}
+                    {isCancelled && (
+                        <span className="text-xs font-bold text-zinc-700 uppercase bg-zinc-950 border border-zinc-900 px-2 py-1 rounded">
+                            Cancelled
                         </span>
                     )}
                  </div>
@@ -205,14 +214,18 @@ export function DownloadItem({ download, onCancel }: DownloadItemProps) {
             </div>
         </div>
 
-        {/* Actions */}
+        {/* Actions - Enhanced Hover for Cancel */}
         <div className="flex flex-col justify-center pl-2">
           {(isActive || isQueued) && (
              <Button 
                 variant="ghost" 
                 size="icon" 
                 onClick={() => onCancel(jobId)} 
-                className="h-8 w-8 text-zinc-600 hover:text-theme-red hover:bg-theme-red/10 transition-colors"
+                className={twMerge(
+                    "h-8 w-8 text-zinc-600 transition-all duration-300",
+                    "opacity-0 group-hover:opacity-100", // Hide by default, show on row hover
+                    "hover:bg-theme-red hover:text-white hover:scale-110 hover:shadow-glow-red" // Pronounced hover state
+                )}
                 title="Cancel"
              >
                 <X className="h-4 w-4" />
