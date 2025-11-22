@@ -93,10 +93,7 @@ pub async fn run_download_process(
 
     let mut cmd = Command::new("yt-dlp");
 
-    // --- WINDOWS ENCODING FIXES ---
-    // 1. Attempt to force UTF-8 mode in Python (helps if Python 3.7+ is embedded)
     cmd.env("PYTHONUTF8", "1");
-    // 2. Attempt to force IO encoding (though PyInstaller binaries often ignore this)
     cmd.env("PYTHONIOENCODING", "utf-8");
 
     cmd.arg(&url)
@@ -105,10 +102,6 @@ pub async fn run_download_process(
         .arg("--no-playlist")
         .arg("--no-simulate") 
         .arg("--newline")
-        // 3. RESTRICT FILENAMES (The Primary Fix)
-        // Forces filenames to be ASCII-only (e.g. "💀" becomes "_").
-        // This bypasses the cp1252 pipe crash because no special chars are ever printed to stdout.
-        .arg("--restrict-filenames")
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
 
