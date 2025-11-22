@@ -1,5 +1,7 @@
 <div align="center">
 
+<img src="/.github/multiyt-dlp_logo.png" alt="Multiyt-dlp Logo" />
+
 # Multiyt-dlp
 ### High-Velocity Concurrent Media Downloader
 
