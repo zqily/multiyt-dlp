@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/tauri";
 import { open } from "@tauri-apps/api/dialog";
-import { DownloadFormatPreset, AppDependencies, AppConfig, GeneralConfig, PreferenceConfig } from '@/types';
+import { DownloadFormatPreset, AppDependencies, AppConfig, GeneralConfig, PreferenceConfig, PlaylistResult } from '@/types';
 
 export async function checkDependencies(): Promise<AppDependencies> {
     return await invoke("check_dependencies");
@@ -30,11 +30,15 @@ export async function savePreferenceConfig(config: PreferenceConfig): Promise<vo
 
 // --- Downloader API ---
 
+export async function expandPlaylist(url: string): Promise<PlaylistResult> {
+    return await invoke("expand_playlist", { url });
+}
+
 export async function startDownload(
   url: string, 
   downloadPath: string | undefined, 
   formatPreset: DownloadFormatPreset,
-  videoResolution: string, // NEW ARG
+  videoResolution: string, 
   embedMetadata: boolean,
   embedThumbnail: boolean,
   filenameTemplate: string

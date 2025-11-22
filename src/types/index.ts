@@ -4,12 +4,15 @@ export interface GeneralConfig {
   download_path: string | null;
   filename_template: string;
   template_blocks_json: string | null;
+  // NEW
+  max_concurrent_downloads: number;
+  max_total_instances: number;
 }
 
 export interface PreferenceConfig {
   mode: string;
   format_preset: string;
-  video_resolution: string; // NEW
+  video_resolution: string; 
   embed_metadata: boolean;
   embed_thumbnail: boolean;
 }
@@ -96,4 +99,15 @@ export interface TemplateBlock {
   type: TemplateBlockType;
   value: string; // The yt-dlp string (e.g., "title" or ".")
   label: string; // Display name (e.g., "Title" or ".")
+}
+
+// NEW
+export interface PlaylistEntry {
+    id?: string;
+    url: string;
+    title: string;
+}
+
+export interface PlaylistResult {
+    entries: PlaylistEntry[];
 }

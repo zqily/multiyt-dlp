@@ -14,6 +14,11 @@ interface AppContextType {
   filenameTemplateBlocks: TemplateBlock[];
   setFilenameTemplateBlocks: (blocks: TemplateBlock[]) => void;
   getTemplateString: () => string;
+  
+  // Concurrency (Added this)
+  maxConcurrentDownloads: number;
+  maxTotalInstances: number;
+  setConcurrency: (concurrent: number, total: number) => void;
 
   // Preferences
   preferences: PreferenceConfig;
@@ -29,7 +34,7 @@ const DEFAULT_TEMPLATE_BLOCKS: TemplateBlock[] = [
 const DEFAULT_PREFS: PreferenceConfig = {
     mode: 'video',
     format_preset: 'best',
-    video_resolution: 'best', // NEW
+    video_resolution: 'best',
     embed_metadata: false,
     embed_thumbnail: false
 };
@@ -44,6 +49,10 @@ export const AppProvider = ({ children }: { children: React.ReactNode }) => {
   const [defaultDownloadPath, _setDownloadPath] = useState<string | null>(null);
   const [filenameTemplateBlocks, _setTemplateBlocks] = useState<TemplateBlock[]>(DEFAULT_TEMPLATE_BLOCKS);
   const [preferences, _setPreferences] = useState<PreferenceConfig>(DEFAULT_PREFS);
+  
+  // New Concurrency State
+  const [maxConcurrentDownloads, _setMaxConcurrentDownloads] = useState(4);
+  const [maxTotalInstances, _setMaxTotalInstances] = useState(10);
 
   // 1. Load Config on Mount
   useEffect(() => {
@@ -53,6 +62,11 @@ export const AppProvider = ({ children }: { children: React.ReactNode }) => {
         
         // Load General
         if (config.general.download_path) _setDownloadPath(config.general.download_path);
+        
+        // Load Concurrency limits
+        _setMaxConcurrentDownloads(config.general.max_concurrent_downloads);
+        _setMaxTotalInstances(config.general.max_total_instances);
+
         if (config.general.template_blocks_json) {
             try {
                 const parsed = JSON.parse(config.general.template_blocks_json);
@@ -61,7 +75,6 @@ export const AppProvider = ({ children }: { children: React.ReactNode }) => {
         }
 
         // Load Preferences
-        // Ensure defaults for new keys if loading old config
         _setPreferences({ ...DEFAULT_PREFS, ...config.preferences });
         
       } catch (error) {
@@ -92,7 +105,10 @@ export const AppProvider = ({ children }: { children: React.ReactNode }) => {
     saveGeneralConfig({
         download_path: path,
         filename_template: getTemplateString(),
-        template_blocks_json: JSON.stringify(filenameTemplateBlocks)
+        template_blocks_json: JSON.stringify(filenameTemplateBlocks),
+        // Fix: Include the numbers so Serde doesn't fail
+        max_concurrent_downloads: maxConcurrentDownloads,
+        max_total_instances: maxTotalInstances
     });
   };
 
@@ -101,7 +117,23 @@ export const AppProvider = ({ children }: { children: React.ReactNode }) => {
     saveGeneralConfig({
         download_path: defaultDownloadPath,
         filename_template: getTemplateString(blocks),
-        template_blocks_json: JSON.stringify(blocks)
+        template_blocks_json: JSON.stringify(blocks),
+        // Fix: Include the numbers here too
+        max_concurrent_downloads: maxConcurrentDownloads,
+        max_total_instances: maxTotalInstances
+    });
+  };
+
+  // New Function to handle concurrency updates
+  const setConcurrency = (concurrent: number, total: number) => {
+    _setMaxConcurrentDownloads(concurrent);
+    _setMaxTotalInstances(total);
+    saveGeneralConfig({
+        download_path: defaultDownloadPath,
+        filename_template: getTemplateString(),
+        template_blocks_json: JSON.stringify(filenameTemplateBlocks),
+        max_concurrent_downloads: concurrent,
+        max_total_instances: total
     });
   };
 
@@ -120,6 +152,11 @@ export const AppProvider = ({ children }: { children: React.ReactNode }) => {
     filenameTemplateBlocks,
     setFilenameTemplateBlocks,
     getTemplateString: () => getTemplateString(),
+    
+    maxConcurrentDownloads,
+    maxTotalInstances,
+    setConcurrency,
+
     preferences,
     updatePreferences
   };

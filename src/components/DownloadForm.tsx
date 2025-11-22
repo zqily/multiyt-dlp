@@ -1,8 +1,8 @@
 import React, { useState } from 'react';
 import { Button } from './ui/Button';
 import { Card, CardContent } from './ui/Card';
-import { Download, FolderOpen, Link2, MonitorPlay, Headphones, FileText, Image as ImageIcon, AlertTriangle } from 'lucide-react';
-import { selectDirectory } from '@/api/invoke';
+import { Download, FolderOpen, Link2, MonitorPlay, Headphones, FileText, Image as ImageIcon, AlertTriangle, Loader2 } from 'lucide-react';
+import { selectDirectory, expandPlaylist } from '@/api/invoke';
 import { DownloadFormatPreset } from '@/types';
 import { useAppContext } from '@/contexts/AppContext';
 import { twMerge } from 'tailwind-merge';
@@ -90,29 +90,48 @@ export function DownloadForm({ onDownload }: DownloadFormProps) {
   } = useAppContext();
   
   const [url, setUrl] = useState('');
+  const [isExpanding, setIsExpanding] = useState(false);
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (url.trim()) {
-      const isYoutube = url.includes('youtube.com') || url.includes('youtu.be');
-      if (isYoutube && isJsRuntimeMissing) {
-          const confirmed = window.confirm(
-              "JavaScript Runtime Missing\n\nProceed anyway?"
-          );
-          if (!confirmed) return;
-      }
+    if (!url.trim()) return;
 
-      const template = getTemplateString();
-      onDownload(
-          url, 
-          defaultDownloadPath || undefined, 
-          preferences.format_preset as DownloadFormatPreset,
-          preferences.video_resolution, // Pass resolution
-          preferences.embed_metadata, 
-          preferences.embed_thumbnail, 
-          template
-      );
-      setUrl('');
+    const isYoutube = url.includes('youtube.com') || url.includes('youtu.be');
+    if (isYoutube && isJsRuntimeMissing) {
+        const confirmed = window.confirm(
+            "JavaScript Runtime Missing\n\nProceed anyway?"
+        );
+        if (!confirmed) return;
+    }
+
+    setIsExpanding(true);
+
+    try {
+        // Expand Playlist/URL logic
+        const expanded = await expandPlaylist(url);
+        
+        const template = getTemplateString();
+        
+        // Loop through results and queue them
+        // The backend queue handles concurrency, so we can fire these rapidly
+        for (const entry of expanded.entries) {
+            onDownload(
+                entry.url, 
+                defaultDownloadPath || undefined, 
+                preferences.format_preset as DownloadFormatPreset,
+                preferences.video_resolution,
+                preferences.embed_metadata, 
+                preferences.embed_thumbnail, 
+                template
+            );
+        }
+
+        setUrl('');
+    } catch (err) {
+        console.error("Failed to expand playlist or start download", err);
+        alert("Failed to process URL. Check logs.");
+    } finally {
+        setIsExpanding(false);
     }
   };
 
@@ -167,7 +186,8 @@ export function DownloadForm({ onDownload }: DownloadFormProps) {
                     type="text"
                     value={url}
                     onChange={(e) => setUrl(e.target.value)}
-                    placeholder="https://youtube.com/watch?v=..."
+                    disabled={isExpanding}
+                    placeholder="https://youtube.com/watch?v=... or Playlist URL"
                     className={twMerge(
                         "relative w-full bg-surfaceHighlight border rounded-md pl-10 pr-4 py-2.5 text-sm text-zinc-100 placeholder-zinc-700 focus:outline-none focus:ring-1 transition-all",
                         isYoutube && isJsRuntimeMissing 
@@ -299,11 +319,20 @@ export function DownloadForm({ onDownload }: DownloadFormProps) {
             <Button 
                 type="submit" 
                 variant="default"
-                disabled={!isValidUrl} 
+                disabled={!isValidUrl || isExpanding} 
                 className="w-full h-12 text-base uppercase tracking-wide font-black shadow-lg shadow-theme-cyan/20"
             >
-                <Download className="mr-2 h-5 w-5" />
-                Initialize Download
+                {isExpanding ? (
+                    <>
+                        <Loader2 className="mr-2 h-5 w-5 animate-spin" />
+                        Analyzing...
+                    </>
+                ) : (
+                    <>
+                        <Download className="mr-2 h-5 w-5" />
+                        Initialize Download
+                    </>
+                )}
             </Button>
           </div>
 

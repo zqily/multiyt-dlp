@@ -28,7 +28,10 @@ impl Default for WindowConfig {
 pub struct GeneralConfig {
     pub download_path: Option<String>,
     pub filename_template: String,
-    pub template_blocks_json: Option<String>, 
+    pub template_blocks_json: Option<String>,
+    // NEW: Concurrency limits
+    pub max_concurrent_downloads: u32, // Active network downloads
+    pub max_total_instances: u32,      // Total processes (including ffmpeg mergers)
 }
 
 impl Default for GeneralConfig {
@@ -37,6 +40,8 @@ impl Default for GeneralConfig {
             download_path: None, 
             filename_template: "%(title)s.%(ext)s".to_string(),
             template_blocks_json: None,
+            max_concurrent_downloads: 4,
+            max_total_instances: 10,
         }
     }
 }
@@ -45,7 +50,7 @@ impl Default for GeneralConfig {
 pub struct PreferenceConfig {
     pub mode: String, // "video" | "audio"
     pub format_preset: String,
-    pub video_resolution: String, // NEW: "best", "2160p", "1440p", "1080p", etc.
+    pub video_resolution: String, 
     pub embed_metadata: bool,
     pub embed_thumbnail: bool,
 }

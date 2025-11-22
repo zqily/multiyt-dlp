@@ -45,6 +45,34 @@ impl Job {
     }
 }
 
+// --- Queue Struct ---
+// Holds all data needed to spawn the process later
+#[derive(Debug, Clone)]
+pub struct QueuedJob {
+    pub id: Uuid,
+    pub url: String,
+    pub download_path: Option<String>,
+    pub format_preset: DownloadFormatPreset,
+    pub video_resolution: String,
+    pub embed_metadata: bool,
+    pub embed_thumbnail: bool,
+    pub filename_template: String,
+}
+
+// --- Playlist Expansion ---
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct PlaylistResult {
+    pub entries: Vec<PlaylistEntry>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct PlaylistEntry {
+    pub id: Option<String>,
+    pub url: String,
+    pub title: String,
+}
+
 // --- Event Payloads ---
 
 #[derive(Clone, serde::Serialize)]
