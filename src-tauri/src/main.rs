@@ -5,6 +5,7 @@ use std::sync::{Arc, Mutex};
 use tauri::{Manager, WindowEvent};
 use crate::core::manager::JobManager;
 use crate::config::ConfigManager;
+use crate::core::logging::LogManager;
 
 mod commands;
 mod core;
@@ -12,15 +13,22 @@ mod models;
 mod config;
 
 fn main() {
-    let job_manager = Arc::new(Mutex::new(JobManager::new()));
+    // 1. Load Config first to get preferred Log Level
     let config_manager = Arc::new(ConfigManager::new());
+    let initial_config = config_manager.get_config();
+    
+    // 2. Initialize Logging System
+    let log_manager = LogManager::init(&initial_config.general.log_level);
+
+    let job_manager = Arc::new(Mutex::new(JobManager::new()));
 
     let config_manager_setup = config_manager.clone();
     let config_manager_event = config_manager.clone();
 
     tauri::Builder::default()
         .manage(job_manager)
-        .manage(config_manager) 
+        .manage(config_manager)
+        .manage(log_manager) // 3. Manage Log Manager State
         .setup(move |app| {
             let main_window = app.get_window("main").unwrap();
             let config = config_manager_setup.get_config();
@@ -33,6 +41,9 @@ fn main() {
                 x: config.window.x as i32,
                 y: config.window.y as i32,
             }));
+            
+            // Example log
+            tracing::info!("Application startup complete. Window initialized.");
 
             Ok(())
         })
@@ -74,7 +85,7 @@ fn main() {
             commands::system::close_splash,
             commands::downloader::start_download,
             commands::downloader::cancel_download,
-            commands::downloader::expand_playlist, // NEW
+            commands::downloader::expand_playlist,
             commands::config::get_app_config,
             commands::config::save_general_config,
             commands::config::save_preference_config,

@@ -6,6 +6,8 @@ export interface GeneralConfig {
   template_blocks_json: string | null;
   max_concurrent_downloads: number;
   max_total_instances: number;
+  // NEW
+  log_level: string;
 }
 
 export interface PreferenceConfig {

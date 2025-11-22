@@ -19,8 +19,12 @@ thiserror = "1.0"
 regex = "1.9"
 uuid = { version = "1.4", features = ["v4", "serde"] }
 once_cell = "1.18"
-# NEW: For finding home directory
 dirs = "5.0" 
+tracing = "0.1"
+# Use 0.3 which will pick up the latest (likely 0.3.18+) automatically
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json", "registry", "std"] }
+tracing-appender = "0.2"
+chrono = "0.4"
 
 # For POSIX-specific process signaling
 [target.'cfg(not(windows))'.dependencies]

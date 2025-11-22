@@ -29,9 +29,10 @@ pub struct GeneralConfig {
     pub download_path: Option<String>,
     pub filename_template: String,
     pub template_blocks_json: Option<String>,
-    // NEW: Concurrency limits
-    pub max_concurrent_downloads: u32, // Active network downloads
-    pub max_total_instances: u32,      // Total processes (including ffmpeg mergers)
+    pub max_concurrent_downloads: u32,
+    pub max_total_instances: u32,
+    // NEW: Log Level
+    pub log_level: String, 
 }
 
 impl Default for GeneralConfig {
@@ -42,13 +43,14 @@ impl Default for GeneralConfig {
             template_blocks_json: None,
             max_concurrent_downloads: 4,
             max_total_instances: 10,
+            log_level: "info".to_string(),
         }
     }
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct PreferenceConfig {
-    pub mode: String, // "video" | "audio"
+    pub mode: String,
     pub format_preset: String,
     pub video_resolution: String, 
     pub embed_metadata: bool,

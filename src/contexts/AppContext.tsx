@@ -20,6 +20,10 @@ interface AppContextType {
   maxTotalInstances: number;
   setConcurrency: (concurrent: number, total: number) => void;
 
+  // Logs
+  logLevel: string;
+  setLogLevel: (level: string) => void;
+
   // Preferences
   preferences: PreferenceConfig;
   updatePreferences: (updates: Partial<PreferenceConfig>) => void;
@@ -53,6 +57,9 @@ export const AppProvider = ({ children }: { children: React.ReactNode }) => {
   // Concurrency State
   const [maxConcurrentDownloads, _setMaxConcurrentDownloads] = useState(4);
   const [maxTotalInstances, _setMaxTotalInstances] = useState(10);
+  
+  // Log State
+  const [logLevel, _setLogLevel] = useState('info');
 
   useEffect(() => {
     const load = async () => {
@@ -64,6 +71,7 @@ export const AppProvider = ({ children }: { children: React.ReactNode }) => {
         
         _setMaxConcurrentDownloads(config.general.max_concurrent_downloads);
         _setMaxTotalInstances(config.general.max_total_instances);
+        _setLogLevel(config.general.log_level || 'info');
 
         if (config.general.template_blocks_json) {
             try {
@@ -100,38 +108,42 @@ export const AppProvider = ({ children }: { children: React.ReactNode }) => {
     }).join('');
   }, [filenameTemplateBlocks]);
 
+  const saveGeneral = (
+      path: string | null, 
+      blocks: TemplateBlock[], 
+      concurrent: number, 
+      total: number, 
+      log: string
+    ) => {
+      saveGeneralConfig({
+        download_path: path,
+        filename_template: getTemplateString(blocks),
+        template_blocks_json: JSON.stringify(blocks),
+        max_concurrent_downloads: concurrent,
+        max_total_instances: total,
+        log_level: log
+      }).catch(e => console.error("Failed to save general config:", e));
+  };
+
   const setDefaultDownloadPath = (path: string) => {
     _setDownloadPath(path);
-    saveGeneralConfig({
-        download_path: path,
-        filename_template: getTemplateString(),
-        template_blocks_json: JSON.stringify(filenameTemplateBlocks),
-        max_concurrent_downloads: maxConcurrentDownloads,
-        max_total_instances: maxTotalInstances
-    }).catch(e => console.error("Failed to save download path:", e));
+    saveGeneral(path, filenameTemplateBlocks, maxConcurrentDownloads, maxTotalInstances, logLevel);
   };
 
   const setFilenameTemplateBlocks = (blocks: TemplateBlock[]) => {
     _setTemplateBlocks(blocks);
-    saveGeneralConfig({
-        download_path: defaultDownloadPath,
-        filename_template: getTemplateString(blocks),
-        template_blocks_json: JSON.stringify(blocks),
-        max_concurrent_downloads: maxConcurrentDownloads,
-        max_total_instances: maxTotalInstances
-    }).catch(e => console.error("Failed to save template:", e));
+    saveGeneral(defaultDownloadPath, blocks, maxConcurrentDownloads, maxTotalInstances, logLevel);
   };
 
   const setConcurrency = (concurrent: number, total: number) => {
     _setMaxConcurrentDownloads(concurrent);
     _setMaxTotalInstances(total);
-    saveGeneralConfig({
-        download_path: defaultDownloadPath,
-        filename_template: getTemplateString(),
-        template_blocks_json: JSON.stringify(filenameTemplateBlocks),
-        max_concurrent_downloads: concurrent,
-        max_total_instances: total
-    }).catch(e => console.error("Failed to save concurrency:", e));
+    saveGeneral(defaultDownloadPath, filenameTemplateBlocks, concurrent, total, logLevel);
+  };
+
+  const setLogLevel = (level: string) => {
+      _setLogLevel(level);
+      saveGeneral(defaultDownloadPath, filenameTemplateBlocks, maxConcurrentDownloads, maxTotalInstances, level);
   };
 
   const updatePreferences = (updates: Partial<PreferenceConfig>) => {
@@ -152,6 +164,8 @@ export const AppProvider = ({ children }: { children: React.ReactNode }) => {
     maxConcurrentDownloads,
     maxTotalInstances,
     setConcurrency,
+    logLevel,
+    setLogLevel,
     preferences,
     updatePreferences
   };
