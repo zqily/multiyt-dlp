@@ -36,6 +36,9 @@ pub struct GeneralConfig {
     pub max_total_instances: u32,
     pub log_level: String, 
     pub check_for_updates: bool,
+    // NEW: Cookies
+    pub cookies_path: Option<String>,
+    pub cookies_from_browser: Option<String>, // "chrome", "firefox", etc. or None
 }
 
 impl Default for GeneralConfig {
@@ -48,6 +51,8 @@ impl Default for GeneralConfig {
             max_total_instances: 10,
             log_level: "info".to_string(),
             check_for_updates: true,
+            cookies_path: None,
+            cookies_from_browser: None,
         }
     }
 }
@@ -179,9 +184,6 @@ impl ConfigManager {
     }
 
     /// Recursively merges `overlay` into `base`.
-    /// - If keys exist in both, `overlay` overwrites `base` ONLY if types are compatible.
-    /// - If key exists in `base` but not `overlay`, `base` keeps its value (Default).
-    /// - If key exists in `overlay` but not `base` (deprecated field), it is ignored.
     fn tolerant_merge(base: &mut Value, overlay: &Value) {
         match (base, overlay) {
             (Value::Object(base_map), Value::Object(overlay_map)) => {
@@ -189,25 +191,15 @@ impl ConfigManager {
                     if let Some(base_val) = base_map.get_mut(k) {
                         Self::tolerant_merge(base_val, v);
                     }
-                    // Else: Key is in overlay (disk) but not in base (struct).
-                    // This means it's an old deprecated setting. We ignore it.
                 }
             }
             (base_val, overlay_val) => {
-                // If types match, allow overwrite.
-                // Also allow overwriting nulls or if the overlay matches the expected structure slightly better?
-                // For simplicity, strict type check prevents crashes.
-                // e.g. If Struct expects Int, but Disk has String, we keep Int (Default).
-                
-                // Special case: Numbers. specific int/float diffs in serde_json can be annoying,
-                // but usually serde handles number casting during final deserialization if it's close enough.
                 if base_val.is_number() && overlay_val.is_number() {
                     *base_val = overlay_val.clone();
                 } 
                 else if std::mem::discriminant(base_val) == std::mem::discriminant(overlay_val) {
                     *base_val = overlay_val.clone();
                 }
-                // If base is null (Option::None), we accept whatever overlay has
                 else if base_val.is_null() {
                     *base_val = overlay_val.clone();
                 }

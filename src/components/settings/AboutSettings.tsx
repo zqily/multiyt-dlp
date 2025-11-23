@@ -72,7 +72,14 @@ export function AboutSettings() {
     const [installing, setInstalling] = useState<string | null>(null);
     const [checkingUpdate, setCheckingUpdate] = useState(false);
 
-    const { currentVersion, latestVersion, isUpdateAvailable, checkAppUpdate } = useAppContext();
+    const { 
+        currentVersion, 
+        latestVersion, 
+        isUpdateAvailable, 
+        checkAppUpdate,
+        checkForUpdates,
+        setCheckForUpdates
+    } = useAppContext();
 
     const fetchData = async () => {
         try {
@@ -136,45 +143,61 @@ export function AboutSettings() {
             </div>
 
             {/* App Update Status */}
-            <div className="bg-zinc-900/30 border border-zinc-800 p-4 rounded-lg flex items-center justify-between">
-                <div>
-                    <div className="text-sm font-medium text-zinc-200">Application Version</div>
-                    {isUpdateAvailable ? (
-                        <div className="text-xs text-theme-cyan mt-1 flex items-center gap-2">
-                             <ArrowUpCircle className="h-3 w-3" />
-                             <span>Update Available: v{latestVersion}</span>
-                        </div>
-                    ) : (
-                         <div className="text-xs text-zinc-500 mt-1">
-                             You are on the latest version.
-                         </div>
-                    )}
-                </div>
-                <div className="flex items-center gap-2">
-                    {isUpdateAvailable && (
+            <div className="space-y-4">
+                 <div className="bg-zinc-900/30 border border-zinc-800 p-4 rounded-lg flex items-center justify-between">
+                    <div>
+                        <div className="text-sm font-medium text-zinc-200">Application Version</div>
+                        {isUpdateAvailable ? (
+                            <div className="text-xs text-theme-cyan mt-1 flex items-center gap-2">
+                                <ArrowUpCircle className="h-3 w-3" />
+                                <span>Update Available: v{latestVersion}</span>
+                            </div>
+                        ) : (
+                            <div className="text-xs text-zinc-500 mt-1">
+                                You are on the latest version.
+                            </div>
+                        )}
+                    </div>
+                    <div className="flex items-center gap-2">
+                        {isUpdateAvailable && (
+                            <Button 
+                                size="sm" 
+                                variant="neon" 
+                                className="h-8 text-xs"
+                                onClick={() => openExternalLink("https://github.com/zqily/multiyt-dlp/releases/latest")}
+                            >
+                                <Download className="h-3 w-3 mr-1" /> Update
+                            </Button>
+                        )}
                         <Button 
                             size="sm" 
-                            variant="neon" 
-                            className="h-8 text-xs"
-                            onClick={() => openExternalLink("https://github.com/zqily/multiyt-dlp/releases/latest")}
+                            variant="secondary" 
+                            className="h-8 w-8 p-0" 
+                            onClick={handleUpdateCheck}
+                            title="Check for updates"
                         >
-                            <Download className="h-3 w-3 mr-1" /> Update
+                            <RefreshCw className={`h-3 w-3 ${checkingUpdate ? 'animate-spin' : ''}`} />
                         </Button>
-                    )}
-                    <Button 
-                        size="sm" 
-                        variant="secondary" 
-                        className="h-8 w-8 p-0" 
-                        onClick={handleUpdateCheck}
-                        title="Check for updates"
-                    >
-                        <RefreshCw className={`h-3 w-3 ${checkingUpdate ? 'animate-spin' : ''}`} />
-                    </Button>
+                    </div>
+                </div>
+
+                <div className="flex items-center justify-between px-1">
+                     <div className="text-xs text-zinc-500">Auto-check for updates on startup</div>
+                     <button
+                        onClick={() => setCheckForUpdates(!checkForUpdates)}
+                        className={`w-8 h-4 flex items-center rounded-full px-0.5 transition-colors duration-200 ${
+                            checkForUpdates ? 'bg-theme-cyan' : 'bg-zinc-800'
+                        }`}
+                     >
+                        <div className={`w-3 h-3 rounded-full bg-white transition-transform duration-200 ${
+                            checkForUpdates ? 'translate-x-4' : 'translate-x-0'
+                        }`} />
+                     </button>
                 </div>
             </div>
 
             {/* Dependencies Grid */}
-            <div className="space-y-3">
+            <div className="space-y-3 pt-4 border-t border-zinc-800">
                 <div className="flex items-center gap-2 text-sm text-zinc-400 font-medium">
                     <Cpu className="h-4 w-4" />
                     <span>System Dependencies</span>

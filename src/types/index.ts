@@ -6,6 +6,8 @@ export interface GeneralConfig {
   max_total_instances: number;
   log_level: string;
   check_for_updates: boolean;
+  cookies_path: string | null;
+  cookies_from_browser: string | null;
 }
 
 export interface PreferenceConfig {

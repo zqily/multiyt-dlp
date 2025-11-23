@@ -1,5 +1,18 @@
 import { useAppContext } from '@/contexts/AppContext';
-import { AlertCircle, RefreshCw } from 'lucide-react';
+import { AlertCircle, FileKey, FolderOpen, Lock, X } from 'lucide-react';
+import { open } from '@tauri-apps/api/dialog';
+import { Button } from '../ui/Button';
+
+const BROWSERS = [
+    { label: 'None', value: 'none' },
+    { label: 'Chrome', value: 'chrome' },
+    { label: 'Firefox', value: 'firefox' },
+    { label: 'Edge', value: 'edge' },
+    { label: 'Brave', value: 'brave' },
+    { label: 'Opera', value: 'opera' },
+    { label: 'Vivaldi', value: 'vivaldi' },
+    { label: 'Safari', value: 'safari' },
+];
 
 export function GeneralSettings() {
     const { 
@@ -8,15 +21,16 @@ export function GeneralSettings() {
         setConcurrency,
         logLevel,
         setLogLevel,
-        checkForUpdates,
-        setCheckForUpdates
+        cookiesPath,
+        setCookiesPath,
+        cookiesBrowser,
+        setCookiesBrowser
     } = useAppContext();
 
     const handleChange = (key: 'max_concurrent_downloads' | 'max_total_instances', value: number) => {
         let concurrent = maxConcurrentDownloads;
         let total = maxTotalInstances;
 
-        // Enforce logic: Total >= Concurrent
         if (key === 'max_concurrent_downloads') {
             concurrent = value;
             if (value > total) {
@@ -28,12 +42,96 @@ export function GeneralSettings() {
                 concurrent = value;
             }
         }
-
         setConcurrency(concurrent, total);
+    };
+
+    const handleSelectCookieFile = async () => {
+        try {
+            const selected = await open({
+                multiple: false,
+                filters: [{ name: 'Text Files', extensions: ['txt'] }]
+            });
+            if (selected && typeof selected === 'string') {
+                setCookiesPath(selected);
+            }
+        } catch (err) {
+            console.error("Failed to select cookie file", err);
+        }
     };
 
     return (
         <div className="space-y-8 animate-fade-in pb-6">
+            {/* Cookies & Auth Section */}
+            <div className="space-y-4">
+                <div>
+                    <h3 className="text-base font-medium text-zinc-100">Cookies & Authentication</h3>
+                    <p className="text-sm text-zinc-500">
+                        Load cookies to access age-restricted content or premium subscriptions.
+                    </p>
+                </div>
+                <hr className="border-zinc-800" />
+                
+                <div className="grid gap-6">
+                    {/* File Method */}
+                    <div className="space-y-2">
+                        <div className="flex justify-between items-center">
+                            <label className="text-sm font-medium text-zinc-300 flex items-center gap-2">
+                                <FileKey className="h-4 w-4 text-theme-cyan" />
+                                Load from File (cookies.txt)
+                            </label>
+                            {cookiesPath && (
+                                <button onClick={() => setCookiesPath(null)} className="text-xs text-red-400 hover:text-red-300 flex items-center gap-1">
+                                    <X className="h-3 w-3" /> Clear
+                                </button>
+                            )}
+                        </div>
+                        <div className="flex gap-2">
+                             <input
+                                type="text"
+                                value={cookiesPath || ''}
+                                readOnly
+                                placeholder="No cookie file selected"
+                                className={`flex-grow bg-zinc-900 border rounded-md px-3 py-2 text-sm text-zinc-400 focus:outline-none ${cookiesPath ? 'border-theme-cyan/50' : 'border-zinc-800'}`}
+                             />
+                             <Button 
+                                type="button" 
+                                variant="secondary" 
+                                onClick={handleSelectCookieFile} 
+                                className="border-zinc-700"
+                             >
+                                <FolderOpen className="h-4 w-4" />
+                             </Button>
+                        </div>
+                    </div>
+                    
+                    <div className="relative flex py-1 items-center">
+                        <div className="flex-grow border-t border-zinc-800"></div>
+                        <span className="flex-shrink-0 mx-4 text-xs text-zinc-600 uppercase font-bold">OR</span>
+                        <div className="flex-grow border-t border-zinc-800"></div>
+                    </div>
+
+                    {/* Browser Method */}
+                    <div className="space-y-2">
+                         <label className="text-sm font-medium text-zinc-300 flex items-center gap-2">
+                            <Lock className="h-4 w-4 text-amber-500" />
+                            Extract from Browser
+                         </label>
+                         <select 
+                             value={cookiesBrowser || 'none'}
+                             onChange={(e) => setCookiesBrowser(e.target.value)}
+                             className={`w-full bg-zinc-900 border rounded-md px-3 py-2 text-sm text-zinc-200 focus:outline-none focus:ring-1 ${cookiesBrowser && cookiesBrowser !== 'none' ? 'border-amber-500/50 focus:ring-amber-500/50' : 'border-zinc-800 focus:ring-theme-cyan/50'}`}
+                         >
+                             {BROWSERS.map(b => (
+                                 <option key={b.value} value={b.value}>{b.label}</option>
+                             ))}
+                         </select>
+                         <p className="text-xs text-zinc-500">
+                            Uses <code>--cookies-from-browser</code>. Ensure the browser is closed before starting downloads if you experience issues.
+                         </p>
+                    </div>
+                </div>
+            </div>
+
             {/* Queue Management Section */}
             <div className="space-y-4">
                 <div>
@@ -77,37 +175,6 @@ export function GeneralSettings() {
                             Includes active downloads AND videos that are currently merging/processing.
                         </p>
                     </div>
-                </div>
-            </div>
-            
-            {/* Updates Section */}
-            <div className="space-y-4">
-                <div>
-                    <h3 className="text-base font-medium text-zinc-100">Updates</h3>
-                    <p className="text-sm text-zinc-500">
-                        Manage application update behavior.
-                    </p>
-                </div>
-                <hr className="border-zinc-800" />
-                
-                <div className="flex items-center justify-between">
-                     <div className="flex items-center gap-3">
-                         <RefreshCw className="h-5 w-5 text-zinc-500" />
-                         <div>
-                            <div className="text-sm font-medium text-zinc-300">Auto-check for updates</div>
-                            <div className="text-xs text-zinc-500">Automatically check for new versions on startup.</div>
-                         </div>
-                     </div>
-                     <button
-                        onClick={() => setCheckForUpdates(!checkForUpdates)}
-                        className={`w-11 h-6 flex items-center rounded-full px-1 transition-colors duration-200 ${
-                            checkForUpdates ? 'bg-theme-cyan' : 'bg-zinc-800'
-                        }`}
-                     >
-                        <div className={`w-4 h-4 rounded-full bg-white transition-transform duration-200 ${
-                            checkForUpdates ? 'translate-x-5' : 'translate-x-0'
-                        }`} />
-                     </button>
                 </div>
             </div>
 

@@ -9,8 +9,9 @@ use tokio::sync::mpsc;
 use std::path::PathBuf;
 
 use crate::core::manager::JobManager;
+use crate::config::ConfigManager;
 use crate::models::{DownloadCompletePayload, DownloadErrorPayload, DownloadProgressPayload, DownloadFormatPreset, QueuedJob, JobStatus};
-use crate::commands::system::get_js_runtime_info; // Import the helper
+use crate::commands::system::get_js_runtime_info;
 
 // --- Regex Definitions ---
 static PROGRESS_REGEX: Lazy<Regex> = Lazy::new(|| Regex::new(r"\[download\]\s+(?P<percentage>[\d\.]+)%\s+of\s+~?\s*(?P<size>[^\s]+)(?:\s+at\s+(?P<speed>[^\s]+(?:\s+B/s)?))?(?:\s+ETA\s+(?P<eta>[^\s]+))?").unwrap());
@@ -22,26 +23,27 @@ static METADATA_REGEX: Lazy<Regex> = Lazy::new(|| Regex::new(r"^\[Metadata\]\s+A
 static THUMBNAIL_REGEX: Lazy<Regex> = Lazy::new(|| Regex::new(r"^\[(?:Thumbnails|EmbedThumbnail)\]").unwrap());
 static FIXUP_REGEX: Lazy<Regex> = Lazy::new(|| Regex::new(r"^\[(?:Fixup\w+)\]").unwrap());
 static TITLE_CLEANER_REGEX: Lazy<Regex> = Lazy::new(|| Regex::new(r"\s\[[a-zA-Z0-9_-]{11}\]\.(?:f[0-9]+\.)?[a-z0-9]+$").unwrap());
-
-// NEW: Error Detection Regexes
 static FILESYSTEM_ERROR_REGEX: Lazy<Regex> = Lazy::new(|| Regex::new(r"(?i)(No such file|Invalid argument|cannot be written|WinError 123|Postprocessing: Error opening input files)").unwrap());
 
 
 pub async fn run_download_process(
-    mut job_data: QueuedJob, // Mutable to allow auto-retry modification
+    mut job_data: QueuedJob,
     app_handle: AppHandle,
     manager: Arc<Mutex<JobManager>>,
 ) {
     let job_id = job_data.id;
     let url = job_data.url.clone();
 
-    // We wrap the execution in a loop to handle the retry mechanism
+    // Retrieve Global Config (ConfigManager is thread-safe)
+    let config_manager = app_handle.state::<Arc<ConfigManager>>();
+
     loop {
-        // Resolve local bin directory
+        // Refresh config on every retry loop to catch immediate changes
+        let general_config = config_manager.get_config().general;
+
         let app_dir = app_handle.path_resolver().app_data_dir().unwrap();
         let bin_dir = app_dir.join("bin");
         
-        // Setup paths
         let downloads_dir = if let Some(ref path) = job_data.download_path {
             PathBuf::from(path)
         } else {
@@ -61,7 +63,6 @@ pub async fn run_download_process(
             }
         }
 
-        // Determine binary path (prioritize local)
         let mut yt_dlp_cmd = "yt-dlp".to_string();
         let local_exe = bin_dir.join(if cfg!(windows) { "yt-dlp.exe" } else { "yt-dlp" });
         if local_exe.exists() {
@@ -70,7 +71,6 @@ pub async fn run_download_process(
 
         let mut cmd = Command::new(yt_dlp_cmd);
         
-        // ADD LOCAL BIN TO PATH
         if let Ok(current_path) = std::env::var("PATH") {
             let new_path = format!("{}{}{}", bin_dir.to_string_lossy(), if cfg!(windows) { ";" } else { ":" }, current_path);
             cmd.env("PATH", new_path);
@@ -84,9 +84,20 @@ pub async fn run_download_process(
 
         // --- AUTO-INJECT JS RUNTIME ---
         if let Some((name, path)) = get_js_runtime_info(&bin_dir) {
-            // Example: --js-runtimes "deno:C:\Users\...\deno.exe"
             cmd.arg("--js-runtimes");
             cmd.arg(format!("{}:{}", name, path));
+        }
+
+        // --- COOKIES INJECTION ---
+        // Priority: File > Browser > None
+        if let Some(cookie_path) = &general_config.cookies_path {
+            if !cookie_path.trim().is_empty() {
+                cmd.arg("--cookies").arg(cookie_path);
+            }
+        } else if let Some(browser) = &general_config.cookies_from_browser {
+            if !browser.trim().is_empty() && browser != "none" {
+                cmd.arg("--cookies-from-browser").arg(browser);
+            }
         }
 
         cmd.arg(&url)
@@ -106,10 +117,8 @@ pub async fn run_download_process(
             cmd.creation_flags(0x08000000);
         }
 
-        // NEW: Apply Restrict Filenames if flagged
         if job_data.restrict_filenames {
             cmd.arg("--restrict-filenames");
-            // Also force ASCII to be safe
             cmd.arg("--trim-filenames").arg("200");
         }
 
@@ -177,7 +186,6 @@ pub async fn run_download_process(
             return;
         }
 
-        // If retrying, let user know
         if job_data.restrict_filenames {
             let _ = app_handle.emit_all("download-progress", DownloadProgressPayload {
                 job_id,
@@ -251,7 +259,7 @@ pub async fn run_download_process(
             if trimmed.is_empty() { continue; }
             
             captured_logs.push(trimmed.to_string());
-            if captured_logs.len() > 100 { captured_logs.remove(0); } // Increased log buffer for analysis
+            if captured_logs.len() > 100 { captured_logs.remove(0); }
 
             let mut emit_update = false;
             let mut speed = "N/A".to_string();
@@ -354,7 +362,6 @@ pub async fn run_download_process(
         let status = child.wait().await.expect("Child process encountered an error");
         release_network_slot(&manager, &app_handle, &mut network_slot_released);
 
-        // Check if cancelled first
         let mut manager_lock = manager.lock().unwrap();
         if let Some(job_status) = manager_lock.get_job_status(job_id) {
             if job_status == JobStatus::Cancelled {
@@ -362,10 +369,10 @@ pub async fn run_download_process(
                 drop(manager_lock); 
                 let mut mgr = manager.lock().unwrap();
                 mgr.notify_process_finished(app_handle.clone());
-                return; // End Loop
+                return; 
             }
         }
-        drop(manager_lock); // Unlock for logic
+        drop(manager_lock);
 
         if status.success() {
             let mut manager_lock = manager.lock().unwrap();
@@ -377,27 +384,16 @@ pub async fn run_download_process(
             });
             manager_lock.remove_job(job_id);
             drop(manager_lock);
-            break; // Success - Exit Loop
+            break;
         } else {
-            // --- SMART RETRY LOGIC ---
-            // Join logs to check for keywords
             let log_blob = captured_logs.join("\n");
-            
-            // Check if the error looks like a filename/path issue
             let is_filesystem_error = FILESYSTEM_ERROR_REGEX.is_match(&log_blob);
             
-            // If we haven't tried restricting filenames yet, and it looks like a file error
             if !job_data.restrict_filenames && is_filesystem_error {
-                println!("Error detected for Job {}: Filesystem issue. Retrying with --restrict-filenames.", job_id);
-                
-                // Update flag for next iteration
                 job_data.restrict_filenames = true;
-                
-                // Continue the loop -> Spawns new process with new flag
                 continue; 
             }
 
-            // Real Error
             let mut manager_lock = manager.lock().unwrap();
             manager_lock.update_job_status(job_id, JobStatus::Error).ok();
             let _ = app_handle.emit_all("download-error", DownloadErrorPayload {
@@ -406,11 +402,10 @@ pub async fn run_download_process(
             });
             manager_lock.remove_job(job_id);
             drop(manager_lock);
-            break; // Failure - Exit Loop
+            break;
         }
     }
     
-    // Final cleanup
     let mut mgr = manager.lock().unwrap();
     mgr.notify_process_finished(app_handle.clone());
 }

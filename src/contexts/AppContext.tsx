@@ -16,6 +16,12 @@ interface AppContextType {
   setFilenameTemplateBlocks: (blocks: TemplateBlock[]) => void;
   getTemplateString: (blocks?: TemplateBlock[]) => string;
   
+  // Cookies Config
+  cookiesPath: string | null;
+  setCookiesPath: (path: string | null) => void;
+  cookiesBrowser: string | null;
+  setCookiesBrowser: (browser: string | null) => void;
+  
   // Concurrency
   maxConcurrentDownloads: number;
   maxTotalInstances: number;
@@ -65,6 +71,10 @@ export const AppProvider = ({ children }: { children: React.ReactNode }) => {
   const [filenameTemplateBlocks, _setTemplateBlocks] = useState<TemplateBlock[]>(DEFAULT_TEMPLATE_BLOCKS);
   const [preferences, _setPreferences] = useState<PreferenceConfig>(DEFAULT_PREFS);
   
+  // Cookie State
+  const [cookiesPath, _setCookiesPath] = useState<string | null>(null);
+  const [cookiesBrowser, _setCookiesBrowser] = useState<string | null>(null);
+
   // Concurrency State
   const [maxConcurrentDownloads, _setMaxConcurrentDownloads] = useState(4);
   const [maxTotalInstances, _setMaxTotalInstances] = useState(10);
@@ -78,21 +88,17 @@ export const AppProvider = ({ children }: { children: React.ReactNode }) => {
   const [latestVersion, setLatestVersion] = useState<string | null>(null);
   const [currentVersion, setCurrentVersion] = useState<string | null>(null);
 
-  // Version Comparison Logic
   const checkAppUpdate = async () => {
     try {
         const current = await getVersion();
         setCurrentVersion(current);
         const latestTag = await getLatestAppVersion();
         
-        // Strip 'v' if present
         const cleanLatest = latestTag.replace(/^v/, '');
         const cleanCurrent = current.replace(/^v/, '');
 
         setLatestVersion(cleanLatest);
 
-        // Simple comparison: if strings differ and remote seems larger logic? 
-        // Let's do a simple segment compare
         const v1parts = cleanCurrent.split('.').map(Number);
         const v2parts = cleanLatest.split('.').map(Number);
         
@@ -116,7 +122,9 @@ export const AppProvider = ({ children }: { children: React.ReactNode }) => {
         const config = await getAppConfig();
         
         if (config.general.download_path) _setDownloadPath(config.general.download_path);
-        
+        if (config.general.cookies_path) _setCookiesPath(config.general.cookies_path);
+        if (config.general.cookies_from_browser) _setCookiesBrowser(config.general.cookies_from_browser);
+
         _setMaxConcurrentDownloads(config.general.max_concurrent_downloads);
         _setMaxTotalInstances(config.general.max_total_instances);
         _setLogLevel(config.general.log_level || 'info');
@@ -136,12 +144,9 @@ export const AppProvider = ({ children }: { children: React.ReactNode }) => {
             setIsJsRuntimeMissing(true);
         }
 
-        // Trigger update check if enabled
         if (config.general.check_for_updates) {
-            // Run without awaiting to not block init
             checkAppUpdate();
         } else {
-            // Still get current version for UI
             getVersion().then(v => setCurrentVersion(v));
         }
 
@@ -170,7 +175,9 @@ export const AppProvider = ({ children }: { children: React.ReactNode }) => {
       concurrent: number, 
       total: number, 
       log: string,
-      updates: boolean
+      updates: boolean,
+      cPath: string | null,
+      cBrowser: string | null
     ) => {
       saveGeneralConfig({
         download_path: path,
@@ -179,34 +186,50 @@ export const AppProvider = ({ children }: { children: React.ReactNode }) => {
         max_concurrent_downloads: concurrent,
         max_total_instances: total,
         log_level: log,
-        check_for_updates: updates
+        check_for_updates: updates,
+        cookies_path: cPath,
+        cookies_from_browser: cBrowser
       }).catch(e => console.error("Failed to save general config:", e));
   };
 
   const setDefaultDownloadPath = (path: string) => {
     _setDownloadPath(path);
-    saveGeneral(path, filenameTemplateBlocks, maxConcurrentDownloads, maxTotalInstances, logLevel, checkForUpdates);
+    saveGeneral(path, filenameTemplateBlocks, maxConcurrentDownloads, maxTotalInstances, logLevel, checkForUpdates, cookiesPath, cookiesBrowser);
+  };
+
+  const setCookiesPath = (path: string | null) => {
+      _setCookiesPath(path);
+      // If setting a file, clear the browser selection to avoid conflict ambiguity logic in backend (though backend prioritizes file)
+      if (path) _setCookiesBrowser(null); 
+      saveGeneral(defaultDownloadPath, filenameTemplateBlocks, maxConcurrentDownloads, maxTotalInstances, logLevel, checkForUpdates, path, path ? null : cookiesBrowser);
+  };
+
+  const setCookiesBrowser = (browser: string | null) => {
+      _setCookiesBrowser(browser);
+      // If setting a browser, clear the file path
+      if (browser && browser !== 'none') _setCookiesPath(null);
+      saveGeneral(defaultDownloadPath, filenameTemplateBlocks, maxConcurrentDownloads, maxTotalInstances, logLevel, checkForUpdates, browser && browser !== 'none' ? null : cookiesPath, browser);
   };
 
   const setFilenameTemplateBlocks = (blocks: TemplateBlock[]) => {
     _setTemplateBlocks(blocks);
-    saveGeneral(defaultDownloadPath, blocks, maxConcurrentDownloads, maxTotalInstances, logLevel, checkForUpdates);
+    saveGeneral(defaultDownloadPath, blocks, maxConcurrentDownloads, maxTotalInstances, logLevel, checkForUpdates, cookiesPath, cookiesBrowser);
   };
 
   const setConcurrency = (concurrent: number, total: number) => {
     _setMaxConcurrentDownloads(concurrent);
     _setMaxTotalInstances(total);
-    saveGeneral(defaultDownloadPath, filenameTemplateBlocks, concurrent, total, logLevel, checkForUpdates);
+    saveGeneral(defaultDownloadPath, filenameTemplateBlocks, concurrent, total, logLevel, checkForUpdates, cookiesPath, cookiesBrowser);
   };
 
   const setLogLevel = (level: string) => {
       _setLogLevel(level);
-      saveGeneral(defaultDownloadPath, filenameTemplateBlocks, maxConcurrentDownloads, maxTotalInstances, level, checkForUpdates);
+      saveGeneral(defaultDownloadPath, filenameTemplateBlocks, maxConcurrentDownloads, maxTotalInstances, level, checkForUpdates, cookiesPath, cookiesBrowser);
   };
 
   const setCheckForUpdates = (enabled: boolean) => {
       _setCheckForUpdates(enabled);
-      saveGeneral(defaultDownloadPath, filenameTemplateBlocks, maxConcurrentDownloads, maxTotalInstances, logLevel, enabled);
+      saveGeneral(defaultDownloadPath, filenameTemplateBlocks, maxConcurrentDownloads, maxTotalInstances, logLevel, enabled, cookiesPath, cookiesBrowser);
   };
 
   const updatePreferences = (updates: Partial<PreferenceConfig>) => {
@@ -224,6 +247,10 @@ export const AppProvider = ({ children }: { children: React.ReactNode }) => {
     filenameTemplateBlocks,
     setFilenameTemplateBlocks,
     getTemplateString,
+    cookiesPath,
+    setCookiesPath,
+    cookiesBrowser,
+    setCookiesBrowser,
     maxConcurrentDownloads,
     maxTotalInstances,
     setConcurrency,
