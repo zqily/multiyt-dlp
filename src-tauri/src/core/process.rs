@@ -11,7 +11,7 @@ use std::path::PathBuf;
 use crate::core::manager::JobManager;
 use crate::models::{DownloadCompletePayload, DownloadErrorPayload, DownloadProgressPayload, DownloadFormatPreset, QueuedJob, JobStatus};
 
-// --- Regex Definitions (Unchanged) ---
+// --- Regex Definitions ---
 static PROGRESS_REGEX: Lazy<Regex> = Lazy::new(|| Regex::new(r"\[download\]\s+(?P<percentage>[\d\.]+)%\s+of\s+~?\s*(?P<size>[^\s]+)(?:\s+at\s+(?P<speed>[^\s]+(?:\s+B/s)?))?(?:\s+ETA\s+(?P<eta>[^\s]+))?").unwrap());
 static DESTINATION_REGEX: Lazy<Regex> = Lazy::new(|| Regex::new(r"^\[download\]\s+Destination:\s+(?P<filename>.+)$").unwrap());
 static ALREADY_DOWNLOADED_REGEX: Lazy<Regex> = Lazy::new(|| Regex::new(r"\[download\]\s+(?:Destination:\s+)?(?P<filename>.+?)\s+has already been downloaded").unwrap());
@@ -22,6 +22,7 @@ static THUMBNAIL_REGEX: Lazy<Regex> = Lazy::new(|| Regex::new(r"^\[(?:Thumbnails
 static FIXUP_REGEX: Lazy<Regex> = Lazy::new(|| Regex::new(r"^\[(?:Fixup\w+)\]").unwrap());
 static TITLE_CLEANER_REGEX: Lazy<Regex> = Lazy::new(|| Regex::new(r"\s\[[a-zA-Z0-9_-]{11}\]\.(?:f[0-9]+\.)?[a-z0-9]+$").unwrap());
 
+
 pub async fn run_download_process(
     job_data: QueuedJob,
     app_handle: AppHandle,
@@ -29,7 +30,12 @@ pub async fn run_download_process(
 ) {
     let job_id = job_data.id;
     let url = job_data.url;
+
+    // Resolve local bin directory
+    let app_dir = app_handle.path_resolver().app_data_dir().unwrap();
+    let bin_dir = app_dir.join("bin");
     
+    // Setup paths
     let downloads_dir = if let Some(path) = job_data.download_path {
         PathBuf::from(path)
     } else {
@@ -49,7 +55,22 @@ pub async fn run_download_process(
         }
     }
 
-    let mut cmd = Command::new("yt-dlp");
+    // Determine binary path (prioritize local)
+    let mut yt_dlp_cmd = "yt-dlp".to_string();
+    let local_exe = bin_dir.join(if cfg!(windows) { "yt-dlp.exe" } else { "yt-dlp" });
+    if local_exe.exists() {
+        yt_dlp_cmd = local_exe.to_string_lossy().to_string();
+    }
+
+    let mut cmd = Command::new(yt_dlp_cmd);
+    
+    // ADD LOCAL BIN TO PATH
+    if let Ok(current_path) = std::env::var("PATH") {
+        let new_path = format!("{}{}{}", bin_dir.to_string_lossy(), if cfg!(windows) { ";" } else { ":" }, current_path);
+        cmd.env("PATH", new_path);
+    } else {
+        cmd.env("PATH", bin_dir.to_string_lossy().to_string());
+    }
     
     cmd.env("PYTHONUTF8", "1");
     cmd.env("PYTHONIOENCODING", "utf-8");
@@ -67,7 +88,6 @@ pub async fn run_download_process(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
 
-    // SILENCE WINDOW ON WINDOWS
     #[cfg(target_os = "windows")]
     {
         cmd.creation_flags(0x08000000);
@@ -168,6 +188,7 @@ pub async fn run_download_process(
 
     drop(tx);
 
+    // FIX: Removed unnecessary `mut` and renamed lambda argument
     let mut state_clean_title: Option<String> = None;
     let mut state_final_filepath: Option<String> = None;
     let mut state_percentage: f32 = 0.0;

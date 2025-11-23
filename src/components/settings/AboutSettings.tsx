@@ -1,13 +1,14 @@
 import { useEffect, useState } from 'react';
 import { getVersion, getName } from '@tauri-apps/api/app';
-import { checkDependencies } from '@/api/invoke';
+import { checkDependencies, installDependency } from '@/api/invoke';
 import { DependencyInfo } from '@/types';
-import { Copy, Check, Terminal, AlertCircle, Cpu } from 'lucide-react';
+import { Copy, Check, Terminal, AlertCircle, Cpu, Download, Loader2 } from 'lucide-react';
 import icon from '@/assets/icon.png';
+import { Button } from '../ui/Button';
 
-const DependencyRow = ({ info }: { info: DependencyInfo }) => {
+const DependencyRow = ({ info, onInstall }: { info: DependencyInfo, onInstall?: () => void }) => {
     const [copied, setCopied] = useState(false);
-
+    
     const handleCopy = () => {
         if (info.path) {
             navigator.clipboard.writeText(info.path);
@@ -36,6 +37,11 @@ const DependencyRow = ({ info }: { info: DependencyInfo }) => {
                         )}
                     </div>
                 </div>
+                {onInstall && !info.available && (
+                    <Button size="sm" variant="outline" onClick={onInstall} className="h-7 text-xs">
+                        <Download className="h-3 w-3 mr-1" /> Install
+                    </Button>
+                )}
             </div>
 
             {info.path && (
@@ -63,25 +69,38 @@ export function AboutSettings() {
     const [appVersion, setAppVersion] = useState("0.0.0");
     const [deps, setDeps] = useState<{ yt_dlp?: DependencyInfo, ffmpeg?: DependencyInfo, js_runtime?: DependencyInfo }>({});
     const [loading, setLoading] = useState(true);
+    const [installing, setInstalling] = useState<string | null>(null);
+
+    const fetchData = async () => {
+        try {
+            const name = await getName();
+            const ver = await getVersion();
+            const dependencies = await checkDependencies();
+            setAppName(name);
+            setAppVersion(ver);
+            setDeps(dependencies);
+        } catch (e) {
+            console.error("Failed to fetch system info", e);
+        } finally {
+            setLoading(false);
+        }
+    };
 
     useEffect(() => {
-        const fetchData = async () => {
-            try {
-                const name = await getName();
-                const ver = await getVersion();
-                const dependencies = await checkDependencies();
-                
-                setAppName(name);
-                setAppVersion(ver);
-                setDeps(dependencies);
-            } catch (e) {
-                console.error("Failed to fetch system info", e);
-            } finally {
-                setLoading(false);
-            }
-        };
         fetchData();
     }, []);
+
+    const handleInstall = async (name: string) => {
+        setInstalling(name);
+        try {
+            await installDependency(name);
+            await fetchData();
+        } catch (e) {
+            alert(`Failed to install ${name}: ${e}`);
+        } finally {
+            setInstalling(null);
+        }
+    };
 
     if (loading) {
         return <div className="p-10 text-center text-zinc-500 text-sm animate-pulse">Scanning System...</div>;
@@ -101,6 +120,12 @@ export function AboutSettings() {
                         </span>
                     </div>
                 </div>
+                {installing && (
+                    <div className="ml-auto flex items-center gap-2 text-theme-cyan text-xs animate-pulse">
+                        <Loader2 className="h-4 w-4 animate-spin" />
+                        Installing {installing}...
+                    </div>
+                )}
             </div>
 
             {/* Dependencies Grid */}
@@ -113,13 +138,16 @@ export function AboutSettings() {
                 <div className="grid grid-cols-1 gap-3">
                     {deps.yt_dlp && <DependencyRow info={deps.yt_dlp} />}
                     {deps.ffmpeg && <DependencyRow info={deps.ffmpeg} />}
-                    {deps.js_runtime && <DependencyRow info={deps.js_runtime} />}
+                    {deps.js_runtime && <DependencyRow 
+                        info={deps.js_runtime} 
+                        onInstall={() => handleInstall('js_runtime')} 
+                    />}
                 </div>
             </div>
 
             <div className="pt-4 text-center">
                 <p className="text-[10px] text-zinc-600">
-                    All dependencies are external binaries. Paths are detected from your system environment variables.
+                    Binaries are installed to <code>%AppData%/multiyt-dlp/bin</code> and prioritized over system paths.
                 </p>
             </div>
         </div>

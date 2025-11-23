@@ -2,6 +2,8 @@ use std::process::Command;
 use tauri::{AppHandle, Manager};
 use serde::Serialize;
 use regex::Regex;
+use crate::core::deps;
+use std::path::PathBuf;
 
 #[derive(Serialize, Clone)]
 pub struct DependencyInfo {
@@ -29,28 +31,31 @@ fn new_silent_command(program: &str) -> Command {
     cmd
 }
 
-fn resolve_binary_info(bin_name: &str, version_flag: &str) -> DependencyInfo {
-    // 1. Check Path
-    let path_cmd = if cfg!(target_os = "windows") { "where" } else { "which" };
-    
-    // Use helper to keep it silent
-    let path_output = new_silent_command(path_cmd)
-        .arg(bin_name)
-        .output()
-        .ok();
-    
-    let path = path_output
-        .filter(|o| o.status.success())
-        .and_then(|o| String::from_utf8(o.stdout).ok())
-        .map(|s| s.lines().next().unwrap_or("").trim().to_string());
+fn resolve_binary_info(bin_name: &str, version_flag: &str, local_bin_path: &PathBuf) -> DependencyInfo {
+    // 1. Check Local Bin Folder First
+    let local_path = local_bin_path.join(bin_name);
+    let local_available = local_path.exists();
 
-    let available = path.is_some();
+    let final_path = if local_available {
+        Some(local_path.to_string_lossy().to_string())
+    } else {
+        // 2. Check System Path
+        let path_cmd = if cfg!(target_os = "windows") { "where" } else { "which" };
+        new_silent_command(path_cmd)
+            .arg(bin_name)
+            .output()
+            .ok()
+            .filter(|o| o.status.success())
+            .and_then(|o| String::from_utf8(o.stdout).ok())
+            .map(|s| s.lines().next().unwrap_or("").trim().to_string())
+    };
 
-    // 2. Check Version if available
+    let available = final_path.is_some();
+
+    // 3. Check Version if available
     let mut version = None;
-    if available {
-        // Use helper here too
-        if let Ok(output) = new_silent_command(bin_name).arg(version_flag).output() {
+    if let Some(ref p) = final_path {
+        if let Ok(output) = new_silent_command(p).arg(version_flag).output() {
              if output.status.success() {
                  let out_str = String::from_utf8_lossy(&output.stdout).to_string();
                  let first_line = out_str.lines().next().unwrap_or("").trim().to_string();
@@ -63,18 +68,25 @@ fn resolve_binary_info(bin_name: &str, version_flag: &str) -> DependencyInfo {
         name: bin_name.to_string(),
         available,
         version,
-        path
+        path: final_path
     }
 }
 
 #[tauri::command]
-pub async fn check_dependencies() -> AppDependencies {
-    tauri::async_runtime::spawn_blocking(|| {
+pub async fn check_dependencies(app_handle: AppHandle) -> AppDependencies {
+    let app_dir = app_handle.path_resolver().app_data_dir().unwrap(); // Should exist by now
+    let bin_dir = app_dir.join("bin");
+
+    tauri::async_runtime::spawn_blocking(move || {
+        let bin_path = bin_dir;
+
         // 1. yt-dlp
-        let yt_dlp = resolve_binary_info("yt-dlp", "--version");
+        let exec_name = if cfg!(windows) { "yt-dlp.exe" } else { "yt-dlp" };
+        let yt_dlp = resolve_binary_info(exec_name, "--version", &bin_path);
 
         // 2. ffmpeg
-        let mut ffmpeg = resolve_binary_info("ffmpeg", "-version");
+        let exec_name = if cfg!(windows) { "ffmpeg.exe" } else { "ffmpeg" };
+        let mut ffmpeg = resolve_binary_info(exec_name, "-version", &bin_path);
         if let Some(ref v) = ffmpeg.version {
             let re = Regex::new(r"ffmpeg version ([^\s]+)").unwrap();
             if let Some(caps) = re.captures(v) {
@@ -87,19 +99,29 @@ pub async fn check_dependencies() -> AppDependencies {
             name: "None".to_string(), available: false, version: None, path: None 
         };
 
-        let runtimes = [("deno", "--version"), ("node", "--version"), ("bun", "--version")];
-        
-        for (bin, flag) in runtimes {
-            let info = resolve_binary_info(bin, flag);
-            if info.available {
-                js_runtime = info;
-                if bin == "deno" {
-                     if let Some(ref v) = js_runtime.version {
-                         js_runtime.version = Some(v.replace("deno ", ""));
-                     }
+        // Check local deno first
+        let deno_exec = if cfg!(windows) { "deno.exe" } else { "deno" };
+        let local_deno = resolve_binary_info(deno_exec, "--version", &bin_path);
+
+        if local_deno.available {
+            js_runtime = local_deno;
+            js_runtime.name = "deno".to_string();
+        } else {
+            // Fallback to system
+            let runtimes = [("deno", "--version"), ("node", "--version"), ("bun", "--version")];
+            for (bin, flag) in runtimes {
+                let info = resolve_binary_info(bin, flag, &bin_path); // path check is redundant but safe
+                if info.available {
+                    js_runtime = info;
+                    break;
                 }
-                break;
             }
+        }
+        
+        if js_runtime.name.contains("deno") {
+             if let Some(ref v) = js_runtime.version {
+                 js_runtime.version = Some(v.replace("deno ", ""));
+             }
         }
 
         AppDependencies {
@@ -109,12 +131,12 @@ pub async fn check_dependencies() -> AppDependencies {
         }
     })
     .await
-    .unwrap_or_else(|_| AppDependencies {
-        // Fallback in unlikely case of thread panic
-        yt_dlp: DependencyInfo { name: "yt-dlp".into(), available: false, version: None, path: None },
-        ffmpeg: DependencyInfo { name: "ffmpeg".into(), available: false, version: None, path: None },
-        js_runtime: DependencyInfo { name: "js".into(), available: false, version: None, path: None },
-    })
+    .unwrap()
+}
+
+#[tauri::command]
+pub async fn install_dependency(app_handle: AppHandle, name: String) -> Result<(), String> {
+    deps::install_dep(name, app_handle).await
 }
 
 #[tauri::command]

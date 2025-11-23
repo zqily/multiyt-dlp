@@ -30,7 +30,6 @@ fn main() {
     let config_manager_saver = config_manager.clone();
 
     // 3. Setup Channel for Debounced Saving
-    // This prevents the UI thread from blocking on File I/O during resize events
     let (tx_save, mut rx_save) = mpsc::unbounded_channel::<()>();
 
     tauri::Builder::default()
@@ -55,13 +54,8 @@ fn main() {
             // Spawn Background Saver Task
             tauri::async_runtime::spawn(async move {
                 while let Some(_) = rx_save.recv().await {
-                    // Clear queue (throttle)
                     while let Ok(_) = rx_save.try_recv() {}
-
-                    // Debounce delay (wait for movement to stop)
                     tokio::time::sleep(Duration::from_millis(500)).await;
-
-                    // Save to disk
                     if let Err(e) = config_manager_saver.save() {
                         tracing::error!("Failed to auto-save window config: {}", e);
                     }
@@ -85,36 +79,27 @@ fn main() {
                 }
             }
 
-            // Window Move Event
             if let WindowEvent::Moved(pos) = event.event() {
                 let mut current_config = config_manager_event.get_config();
                 current_config.window.x = pos.x as f64;
                 current_config.window.y = pos.y as f64;
-                
-                // Update memory only (Fast)
                 config_manager_event.update_window(current_config.window);
-                
-                // Signal background saver
                 let _ = tx_save.send(());
             }
             
-            // Window Resize Event
             if let WindowEvent::Resized(size) = event.event() {
                 if size.width > 0 && size.height > 0 {
                     let mut current_config = config_manager_event.get_config();
                     current_config.window.width = size.width as f64;
                     current_config.window.height = size.height as f64;
-                    
-                    // Update memory only (Fast)
                     config_manager_event.update_window(current_config.window);
-                    
-                    // Signal background saver
                     let _ = tx_save.send(());
                 }
             }
         })
         .invoke_handler(tauri::generate_handler![
             commands::system::check_dependencies,
+            commands::system::install_dependency,
             commands::system::open_external_link,
             commands::system::close_splash,
             commands::downloader::start_download,
