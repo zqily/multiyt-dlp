@@ -95,13 +95,11 @@ pub async fn start_download(
         filename_template
     };
 
-    // 1. Probe the URL (Expand if playlist)
     let entries = probe_url(&url)?;
 
     let mut created_job_ids = Vec::new();
     let mut manager_lock = manager.lock().unwrap();
 
-    // 2. Queue all found entries
     for entry in entries {
         let job_id = Uuid::new_v4();
         
@@ -149,12 +147,10 @@ pub fn cancel_download(
             cmd.stdout(std::process::Stdio::null());
             cmd.stderr(std::process::Stdio::null());
             
-            // SILENCE TASKKILL WINDOW
             use std::os::windows::process::CommandExt;
             cmd.creation_flags(0x08000000); 
 
             let status = cmd.status();
-            
             if let Err(e) = status {
                  return Err(AppError::ProcessKillFailed(format!("Failed to execute taskkill: {}", e)));
             }
@@ -197,7 +193,7 @@ pub fn get_pending_jobs() -> Result<u32, String> {
 pub async fn resume_pending_jobs(
     app_handle: AppHandle,
     manager: State<'_, Arc<Mutex<JobManager>>>
-) -> Result<Vec<Uuid>, String> {
+) -> Result<Vec<QueuedJob>, String> { // CHANGED: Returns full struct Vec<QueuedJob>
     let path = get_jobs_file_path();
     if !path.exists() {
         return Ok(vec![]);
@@ -206,23 +202,16 @@ pub async fn resume_pending_jobs(
     let content = fs::read_to_string(&path).map_err(|e| e.to_string())?;
     let jobs: Vec<QueuedJob> = serde_json::from_str(&content).map_err(|e| e.to_string())?;
 
-    let mut resumed_ids = Vec::new();
+    let mut resumed_jobs = Vec::new();
     let mut manager_lock = manager.lock().unwrap();
 
     for job in jobs {
-        // Reuse existing config.
-        // Important: add_job re-saves the state, so if we crash during resume loop, 
-        // the list is constantly updating.
         if let Ok(_) = manager_lock.add_job(job.clone(), app_handle.clone()) {
-            resumed_ids.push(job.id);
+            resumed_jobs.push(job);
         }
     }
 
-    // Delete old file only if we successfully re-queued everything
-    // Actually, add_job overwrites the file with current state, so explicit delete isn't strictly necessary 
-    // unless we want to be clean. But since add_job manages persistence, we are good.
-    
-    Ok(resumed_ids)
+    Ok(resumed_jobs)
 }
 
 #[tauri::command]
@@ -231,10 +220,7 @@ pub fn clear_pending_jobs(manager: State<'_, Arc<Mutex<JobManager>>>) -> Result<
     if path.exists() {
         fs::remove_file(path).map_err(|e| e.to_string())?;
     }
-    
-    // Also clean temp folder since we are abandoning these jobs
     let mgr = manager.lock().unwrap();
     mgr.clean_temp_directory();
-    
     Ok(())
 }

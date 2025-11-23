@@ -105,7 +105,20 @@ export interface Download {
   filenameTemplate?: string;
   embedMetadata?: boolean; 
   embedThumbnail?: boolean;
-  restrictFilenames?: boolean; // NEW
+  restrictFilenames?: boolean;
+}
+
+// NEW: Matching Rust QueuedJob struct
+export interface QueuedJob {
+  id: string; 
+  url: string;
+  download_path?: string;
+  format_preset: DownloadFormatPreset;
+  video_resolution: string;
+  embed_metadata: boolean;
+  embed_thumbnail: boolean;
+  filename_template: string;
+  restrict_filenames: boolean;
 }
 
 export type TemplateBlockType = 'variable' | 'separator' | 'text';

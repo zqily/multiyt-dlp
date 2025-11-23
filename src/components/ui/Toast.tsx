@@ -3,9 +3,11 @@ import { useAppContext } from '@/contexts/AppContext';
 import { X, Download, PartyPopper, PlayCircle, Trash2 } from 'lucide-react';
 import { openExternalLink, getPendingJobs, resumePendingJobs, clearPendingJobs } from '@/api/invoke';
 import { Button } from './Button';
+import { useDownloadManager } from '@/hooks/useDownloadManager';
 
 export function Toast() {
     const { isUpdateAvailable, latestVersion, currentVersion } = useAppContext();
+    const { importResumedJobs } = useDownloadManager();
     
     const [visible, setVisible] = useState(false);
     const [mode, setMode] = useState<'update' | 'resume' | null>(null);
@@ -46,9 +48,10 @@ export function Toast() {
     };
 
     const handleResume = async () => {
-        await resumePendingJobs();
-        // We don't need to reload the page anymore because useDownloadManager
-        // has been updated to handle incoming events for new jobs automatically.
+        // 1. Trigger backend resume (returns full job details)
+        const resumedJobs = await resumePendingJobs();
+        // 2. Hydrate frontend state immediately
+        importResumedJobs(resumedJobs);
         setVisible(false);
     };
 

@@ -26,13 +26,23 @@ static FIXUP_REGEX: Lazy<Regex> = Lazy::new(|| Regex::new(r"^\[(?:Fixup\w+)\]").
 static TITLE_CLEANER_REGEX: Lazy<Regex> = Lazy::new(|| Regex::new(r"\s\[[a-zA-Z0-9_-]{11}\]\.(?:f[0-9]+\.)?[a-z0-9]+$").unwrap());
 static FILESYSTEM_ERROR_REGEX: Lazy<Regex> = Lazy::new(|| Regex::new(r"(?i)(No such file|Invalid argument|cannot be written|WinError 123|Postprocessing: Error opening input files)").unwrap());
 
-/// Robust move: Tries rename (fast), falls back to copy+delete (slow, for cross-drive)
 fn robust_move_file(src: &Path, dest: &Path) -> Result<(), std::io::Error> {
     if let Err(_) = fs::rename(src, dest) {
         fs::copy(src, dest)?;
         fs::remove_file(src)?;
     }
     Ok(())
+}
+
+fn emit_error(job_id: uuid::Uuid, error: String, app_handle: &AppHandle, manager: &Arc<Mutex<JobManager>>) {
+    let mut lock = manager.lock().unwrap();
+    lock.update_job_status(job_id, JobStatus::Error).ok();
+    lock.notify_process_finished(app_handle.clone());
+    
+    let _ = app_handle.emit_all("download-error", DownloadErrorPayload {
+        job_id,
+        error,
+    });
 }
 
 pub async fn run_download_process(
@@ -42,6 +52,16 @@ pub async fn run_download_process(
 ) {
     let job_id = job_data.id;
     let url = job_data.url.clone();
+
+    // --- ISSUE 3 FIX: EMIT INITIALIZING EVENT IMMEDIATELY ---
+    let _ = app_handle.emit_all("download-progress", DownloadProgressPayload {
+        job_id,
+        percentage: 0.0,
+        speed: "Starting...".to_string(),
+        eta: "Calculating...".to_string(),
+        filename: None,
+        phase: Some("Initializing Process...".to_string()),
+    });
 
     // Retrieve Global Config (ConfigManager is thread-safe)
     let config_manager = app_handle.state::<Arc<ConfigManager>>();
@@ -53,7 +73,6 @@ pub async fn run_download_process(
         let app_dir = app_handle.path_resolver().app_data_dir().unwrap();
         let bin_dir = app_dir.join("bin");
         
-        // 1. Determine Target Destination (Where the user WANTS the file)
         let target_dir = if let Some(ref path) = job_data.download_path {
             PathBuf::from(path)
         } else {
@@ -73,7 +92,6 @@ pub async fn run_download_process(
             }
         }
 
-        // 2. Determine Temp Directory (Where execution HAPPENS)
         let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
         let temp_dir = home.join(".multiyt-dlp").join("temp_downloads");
         if !temp_dir.exists() {
@@ -101,16 +119,13 @@ pub async fn run_download_process(
         cmd.env("PYTHONUTF8", "1");
         cmd.env("PYTHONIOENCODING", "utf-8");
         
-        // IMPORTANT: Run inside the temp directory
         cmd.current_dir(&temp_dir);
 
-        // --- AUTO-INJECT JS RUNTIME ---
         if let Some((name, path)) = get_js_runtime_info(&bin_dir) {
             cmd.arg("--js-runtimes");
             cmd.arg(format!("{}:{}", name, path));
         }
 
-        // --- COOKIES INJECTION ---
         if let Some(cookie_path) = &general_config.cookies_path {
             if !cookie_path.trim().is_empty() {
                 cmd.arg("--cookies").arg(cookie_path);
@@ -216,15 +231,6 @@ pub async fn run_download_process(
                 filename: None,
                 phase: Some("Sanitizing Filenames (Retry)".to_string()),
             });
-        } else {
-            let _ = app_handle.emit_all("download-progress", DownloadProgressPayload {
-                job_id,
-                percentage: 0.0,
-                speed: "Starting...".to_string(),
-                eta: "Calculating...".to_string(),
-                filename: None,
-                phase: Some("Initializing Process...".to_string()),
-            });
         }
 
         let stdout = child.stdout.take().expect("Failed to capture stdout");
@@ -250,7 +256,7 @@ pub async fn run_download_process(
         drop(tx);
 
         let mut state_clean_title: Option<String> = None;
-        let mut state_final_filename: Option<String> = None; // Just the filename, no path
+        let mut state_final_filename: Option<String> = None; 
         let mut state_percentage: f32 = 0.0;
         let mut state_phase: String = "Initializing".to_string();
         let mut captured_logs = Vec::new();
@@ -401,7 +407,6 @@ pub async fn run_download_process(
         drop(manager_lock);
 
         if status.success() {
-            // SUCCESS: Move file from TEMP to TARGET
             if let Some(filename) = state_final_filename {
                 let src_path = temp_dir.join(&filename);
                 let dest_path = target_dir.join(&filename);
@@ -420,7 +425,6 @@ pub async fn run_download_process(
                             break;
                         },
                         Err(e) => {
-                            // Move failed
                             let mut manager_lock = manager.lock().unwrap();
                             manager_lock.update_job_status(job_id, JobStatus::Error).ok();
                             let _ = app_handle.emit_all("download-error", DownloadErrorPayload {
@@ -433,7 +437,6 @@ pub async fn run_download_process(
                         }
                     }
                 } else {
-                    // File missing in temp?
                      let mut manager_lock = manager.lock().unwrap();
                      manager_lock.update_job_status(job_id, JobStatus::Error).ok();
                      let _ = app_handle.emit_all("download-error", DownloadErrorPayload {
@@ -445,7 +448,6 @@ pub async fn run_download_process(
                      break;
                 }
             } else {
-                // Could not determine filename
                 let mut manager_lock = manager.lock().unwrap();
                 manager_lock.update_job_status(job_id, JobStatus::Error).ok();
                 let _ = app_handle.emit_all("download-error", DownloadErrorPayload {
@@ -457,7 +459,6 @@ pub async fn run_download_process(
                 break;
             }
         } else {
-            // FAIL
             let log_blob = captured_logs.join("\n");
             let is_filesystem_error = FILESYSTEM_ERROR_REGEX.is_match(&log_blob);
             
@@ -480,15 +481,4 @@ pub async fn run_download_process(
     
     let mut mgr = manager.lock().unwrap();
     mgr.notify_process_finished(app_handle.clone());
-}
-
-fn emit_error(job_id: uuid::Uuid, error: String, app_handle: &AppHandle, manager: &Arc<Mutex<JobManager>>) {
-    let mut lock = manager.lock().unwrap();
-    lock.update_job_status(job_id, JobStatus::Error).ok();
-    lock.notify_process_finished(app_handle.clone());
-    
-    let _ = app_handle.emit_all("download-error", DownloadErrorPayload {
-        job_id,
-        error,
-    });
 }

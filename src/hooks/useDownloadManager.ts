@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { listen } from '@tauri-apps/api/event';
-import { Download, DownloadCompletePayload, DownloadErrorPayload, DownloadProgressPayload, DownloadFormatPreset } from '@/types';
+import { Download, DownloadCompletePayload, DownloadErrorPayload, DownloadProgressPayload, DownloadFormatPreset, QueuedJob } from '@/types';
 import { startDownload as apiStartDownload, cancelDownload as apiCancelDownload } from '@/api/invoke';
 
 export function useDownloadManager() {
@@ -14,11 +14,10 @@ export function useDownloadManager() {
       if (existing) {
         newMap.set(jobId, { ...existing, ...newProps });
       } else {
-        // If the job doesn't exist in React state but backend sends an event,
-        // create a placeholder so it appears in the UI.
+        // Fallback for immediate event catch before state hydration (safety net)
         newMap.set(jobId, {
             jobId,
-            url: newProps.filename || 'Resumed Download', // We might not have the original URL in the event payload
+            url: newProps.filename || 'Resumed Download',
             status: newProps.status || 'downloading',
             progress: newProps.progress || 0,
             ...newProps
@@ -112,6 +111,29 @@ export function useDownloadManager() {
     }
   }, []);
 
+  // NEW: Manual hydration method for resumed jobs
+  const importResumedJobs = useCallback((jobs: QueuedJob[]) => {
+      setDownloads((prev) => {
+          const newMap = new Map(prev);
+          jobs.forEach(job => {
+              newMap.set(job.id, {
+                  jobId: job.id,
+                  url: job.url,
+                  status: 'pending', // Will switch to downloading via event shortly
+                  progress: 0,
+                  preset: job.format_preset,
+                  videoResolution: job.video_resolution,
+                  downloadPath: job.download_path,
+                  filenameTemplate: job.filename_template,
+                  embedMetadata: job.embed_metadata,
+                  embedThumbnail: job.embed_thumbnail,
+                  restrictFilenames: job.restrict_filenames
+              });
+          });
+          return newMap;
+      });
+  }, []);
+
   const cancelDownload = useCallback(async (jobId: string) => {
     try {
       await apiCancelDownload(jobId);
@@ -130,5 +152,5 @@ export function useDownloadManager() {
       });
   }, []);
 
-  return { downloads, startDownload, cancelDownload, removeDownload };
+  return { downloads, startDownload, cancelDownload, removeDownload, importResumedJobs };
 }
