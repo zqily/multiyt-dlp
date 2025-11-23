@@ -16,11 +16,9 @@ mod models;
 mod config;
 
 fn main() {
-    // 1. Load Config first to get preferred Log Level
     let config_manager = Arc::new(ConfigManager::new());
     let initial_config = config_manager.get_config();
     
-    // 2. Initialize Logging System
     let log_manager = LogManager::init(&initial_config.general.log_level);
 
     let job_manager = Arc::new(Mutex::new(JobManager::new()));
@@ -29,7 +27,6 @@ fn main() {
     let config_manager_event = config_manager.clone();
     let config_manager_saver = config_manager.clone();
 
-    // 3. Setup Channel for Debounced Saving
     let (tx_save, mut rx_save) = mpsc::unbounded_channel::<()>();
 
     tauri::Builder::default()
@@ -51,7 +48,6 @@ fn main() {
             
             tracing::info!("Application startup complete. Window initialized.");
 
-            // Spawn Background Saver Task
             tauri::async_runtime::spawn(async move {
                 while let Some(_) = rx_save.recv().await {
                     while let Ok(_) = rx_save.try_recv() {}
@@ -100,9 +96,10 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             commands::system::check_dependencies,
             commands::system::install_dependency,
-            commands::system::sync_dependencies, // NEW
+            commands::system::sync_dependencies,
             commands::system::open_external_link,
             commands::system::close_splash,
+            commands::system::get_latest_app_version, // NEW
             commands::downloader::start_download,
             commands::downloader::cancel_download,
             commands::downloader::expand_playlist,

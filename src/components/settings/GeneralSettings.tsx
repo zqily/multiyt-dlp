@@ -1,5 +1,5 @@
 import { useAppContext } from '@/contexts/AppContext';
-import { AlertCircle } from 'lucide-react';
+import { AlertCircle, RefreshCw } from 'lucide-react';
 
 export function GeneralSettings() {
     const { 
@@ -7,7 +7,9 @@ export function GeneralSettings() {
         maxTotalInstances, 
         setConcurrency,
         logLevel,
-        setLogLevel
+        setLogLevel,
+        checkForUpdates,
+        setCheckForUpdates
     } = useAppContext();
 
     const handleChange = (key: 'max_concurrent_downloads' | 'max_total_instances', value: number) => {
@@ -75,6 +77,37 @@ export function GeneralSettings() {
                             Includes active downloads AND videos that are currently merging/processing.
                         </p>
                     </div>
+                </div>
+            </div>
+            
+            {/* Updates Section */}
+            <div className="space-y-4">
+                <div>
+                    <h3 className="text-base font-medium text-zinc-100">Updates</h3>
+                    <p className="text-sm text-zinc-500">
+                        Manage application update behavior.
+                    </p>
+                </div>
+                <hr className="border-zinc-800" />
+                
+                <div className="flex items-center justify-between">
+                     <div className="flex items-center gap-3">
+                         <RefreshCw className="h-5 w-5 text-zinc-500" />
+                         <div>
+                            <div className="text-sm font-medium text-zinc-300">Auto-check for updates</div>
+                            <div className="text-xs text-zinc-500">Automatically check for new versions on startup.</div>
+                         </div>
+                     </div>
+                     <button
+                        onClick={() => setCheckForUpdates(!checkForUpdates)}
+                        className={`w-11 h-6 flex items-center rounded-full px-1 transition-colors duration-200 ${
+                            checkForUpdates ? 'bg-theme-cyan' : 'bg-zinc-800'
+                        }`}
+                     >
+                        <div className={`w-4 h-4 rounded-full bg-white transition-transform duration-200 ${
+                            checkForUpdates ? 'translate-x-5' : 'translate-x-0'
+                        }`} />
+                     </button>
                 </div>
             </div>
 

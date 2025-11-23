@@ -31,8 +31,9 @@ pub struct GeneralConfig {
     pub template_blocks_json: Option<String>,
     pub max_concurrent_downloads: u32,
     pub max_total_instances: u32,
-    // NEW: Log Level
     pub log_level: String, 
+    // NEW: Auto Update Setting
+    pub check_for_updates: bool,
 }
 
 impl Default for GeneralConfig {
@@ -44,6 +45,7 @@ impl Default for GeneralConfig {
             max_concurrent_downloads: 4,
             max_total_instances: 10,
             log_level: "info".to_string(),
+            check_for_updates: true,
         }
     }
 }
@@ -51,9 +53,9 @@ impl Default for GeneralConfig {
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct PreferenceConfig {
     pub mode: String,
-    pub format_preset: String, // The currently selected preset
-    pub video_preset: String,  // The last used video preset
-    pub audio_preset: String,  // The last used audio preset
+    pub format_preset: String, 
+    pub video_preset: String,  
+    pub audio_preset: String,  
     pub video_resolution: String, 
     pub embed_metadata: bool,
     pub embed_thumbnail: bool,
@@ -64,8 +66,8 @@ impl Default for PreferenceConfig {
         Self {
             mode: "video".to_string(),
             format_preset: "best".to_string(),
-            video_preset: "best".to_string(),        // Default for video mode
-            audio_preset: "audio_best".to_string(),  // Default for audio mode
+            video_preset: "best".to_string(),        
+            audio_preset: "audio_best".to_string(),  
             video_resolution: "best".to_string(),
             embed_metadata: false,
             embed_thumbnail: false,

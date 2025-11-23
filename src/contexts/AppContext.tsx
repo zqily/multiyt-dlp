@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { TemplateBlock, PreferenceConfig } from '@/types';
-import { getAppConfig, saveGeneralConfig, savePreferenceConfig, checkDependencies } from '@/api/invoke';
+import { getAppConfig, saveGeneralConfig, savePreferenceConfig, checkDependencies, getLatestAppVersion } from '@/api/invoke';
+import { getVersion } from '@tauri-apps/api/app';
 
 interface AppContextType {
   // State
@@ -24,6 +25,14 @@ interface AppContextType {
   logLevel: string;
   setLogLevel: (level: string) => void;
 
+  // Update
+  checkForUpdates: boolean;
+  setCheckForUpdates: (enabled: boolean) => void;
+  isUpdateAvailable: boolean;
+  latestVersion: string | null;
+  currentVersion: string | null;
+  checkAppUpdate: () => Promise<void>;
+
   // Preferences
   preferences: PreferenceConfig;
   updatePreferences: (updates: Partial<PreferenceConfig>) => void;
@@ -38,8 +47,8 @@ const DEFAULT_TEMPLATE_BLOCKS: TemplateBlock[] = [
 const DEFAULT_PREFS: PreferenceConfig = {
     mode: 'video',
     format_preset: 'best',
-    video_preset: 'best',        // Default logic: best
-    audio_preset: 'audio_best',  // Default logic: audio_best
+    video_preset: 'best',        
+    audio_preset: 'audio_best',  
     video_resolution: 'best',
     embed_metadata: false,
     embed_thumbnail: false
@@ -63,17 +72,55 @@ export const AppProvider = ({ children }: { children: React.ReactNode }) => {
   // Log State
   const [logLevel, _setLogLevel] = useState('info');
 
+  // Update State
+  const [checkForUpdates, _setCheckForUpdates] = useState(true);
+  const [isUpdateAvailable, setIsUpdateAvailable] = useState(false);
+  const [latestVersion, setLatestVersion] = useState<string | null>(null);
+  const [currentVersion, setCurrentVersion] = useState<string | null>(null);
+
+  // Version Comparison Logic
+  const checkAppUpdate = async () => {
+    try {
+        const current = await getVersion();
+        setCurrentVersion(current);
+        const latestTag = await getLatestAppVersion();
+        
+        // Strip 'v' if present
+        const cleanLatest = latestTag.replace(/^v/, '');
+        const cleanCurrent = current.replace(/^v/, '');
+
+        setLatestVersion(cleanLatest);
+
+        // Simple comparison: if strings differ and remote seems larger logic? 
+        // Let's do a simple segment compare
+        const v1parts = cleanCurrent.split('.').map(Number);
+        const v2parts = cleanLatest.split('.').map(Number);
+        
+        let isNewer = false;
+        for (let i = 0; i < Math.max(v1parts.length, v2parts.length); i++) {
+            const v1 = v1parts[i] || 0;
+            const v2 = v2parts[i] || 0;
+            if (v2 > v1) { isNewer = true; break; }
+            if (v1 > v2) { break; }
+        }
+
+        setIsUpdateAvailable(isNewer);
+    } catch (e) {
+        console.warn("Update check failed:", e);
+    }
+  };
+
   useEffect(() => {
     const load = async () => {
       try {
         const config = await getAppConfig();
         
-        // Load General
         if (config.general.download_path) _setDownloadPath(config.general.download_path);
         
         _setMaxConcurrentDownloads(config.general.max_concurrent_downloads);
         _setMaxTotalInstances(config.general.max_total_instances);
         _setLogLevel(config.general.log_level || 'info');
+        _setCheckForUpdates(config.general.check_for_updates);
 
         if (config.general.template_blocks_json) {
             try {
@@ -82,14 +129,20 @@ export const AppProvider = ({ children }: { children: React.ReactNode }) => {
             } catch(e) { console.warn("Failed to parse blocks", e); }
         }
 
-        // Load Preferences
-        // Use spread to ensure new fields in DEFAULT_PREFS are present even if config.json is old
         _setPreferences({ ...DEFAULT_PREFS, ...config.preferences });
         
-        // Check Dependencies for Runtime Warning (Silently)
         const deps = await checkDependencies();
         if (!deps.js_runtime.available) {
             setIsJsRuntimeMissing(true);
+        }
+
+        // Trigger update check if enabled
+        if (config.general.check_for_updates) {
+            // Run without awaiting to not block init
+            checkAppUpdate();
+        } else {
+            // Still get current version for UI
+            getVersion().then(v => setCurrentVersion(v));
         }
 
       } catch (error) {
@@ -116,7 +169,8 @@ export const AppProvider = ({ children }: { children: React.ReactNode }) => {
       blocks: TemplateBlock[], 
       concurrent: number, 
       total: number, 
-      log: string
+      log: string,
+      updates: boolean
     ) => {
       saveGeneralConfig({
         download_path: path,
@@ -124,29 +178,35 @@ export const AppProvider = ({ children }: { children: React.ReactNode }) => {
         template_blocks_json: JSON.stringify(blocks),
         max_concurrent_downloads: concurrent,
         max_total_instances: total,
-        log_level: log
+        log_level: log,
+        check_for_updates: updates
       }).catch(e => console.error("Failed to save general config:", e));
   };
 
   const setDefaultDownloadPath = (path: string) => {
     _setDownloadPath(path);
-    saveGeneral(path, filenameTemplateBlocks, maxConcurrentDownloads, maxTotalInstances, logLevel);
+    saveGeneral(path, filenameTemplateBlocks, maxConcurrentDownloads, maxTotalInstances, logLevel, checkForUpdates);
   };
 
   const setFilenameTemplateBlocks = (blocks: TemplateBlock[]) => {
     _setTemplateBlocks(blocks);
-    saveGeneral(defaultDownloadPath, blocks, maxConcurrentDownloads, maxTotalInstances, logLevel);
+    saveGeneral(defaultDownloadPath, blocks, maxConcurrentDownloads, maxTotalInstances, logLevel, checkForUpdates);
   };
 
   const setConcurrency = (concurrent: number, total: number) => {
     _setMaxConcurrentDownloads(concurrent);
     _setMaxTotalInstances(total);
-    saveGeneral(defaultDownloadPath, filenameTemplateBlocks, concurrent, total, logLevel);
+    saveGeneral(defaultDownloadPath, filenameTemplateBlocks, concurrent, total, logLevel, checkForUpdates);
   };
 
   const setLogLevel = (level: string) => {
       _setLogLevel(level);
-      saveGeneral(defaultDownloadPath, filenameTemplateBlocks, maxConcurrentDownloads, maxTotalInstances, level);
+      saveGeneral(defaultDownloadPath, filenameTemplateBlocks, maxConcurrentDownloads, maxTotalInstances, level, checkForUpdates);
+  };
+
+  const setCheckForUpdates = (enabled: boolean) => {
+      _setCheckForUpdates(enabled);
+      saveGeneral(defaultDownloadPath, filenameTemplateBlocks, maxConcurrentDownloads, maxTotalInstances, logLevel, enabled);
   };
 
   const updatePreferences = (updates: Partial<PreferenceConfig>) => {
@@ -169,6 +229,12 @@ export const AppProvider = ({ children }: { children: React.ReactNode }) => {
     setConcurrency,
     logLevel,
     setLogLevel,
+    checkForUpdates,
+    setCheckForUpdates,
+    isUpdateAvailable,
+    latestVersion,
+    currentVersion,
+    checkAppUpdate,
     preferences,
     updatePreferences
   };

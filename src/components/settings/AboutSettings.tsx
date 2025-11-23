@@ -1,10 +1,11 @@
 import { useEffect, useState } from 'react';
-import { getVersion, getName } from '@tauri-apps/api/app';
-import { checkDependencies, installDependency } from '@/api/invoke';
+import { getName } from '@tauri-apps/api/app';
+import { checkDependencies, installDependency, openExternalLink } from '@/api/invoke';
 import { DependencyInfo } from '@/types';
-import { Copy, Check, Terminal, AlertCircle, Cpu, Download, Loader2 } from 'lucide-react';
+import { Copy, Check, Terminal, AlertCircle, Cpu, Download, Loader2, ArrowUpCircle, RefreshCw } from 'lucide-react';
 import icon from '@/assets/icon.png';
 import { Button } from '../ui/Button';
+import { useAppContext } from '@/contexts/AppContext';
 
 const DependencyRow = ({ info, onInstall }: { info: DependencyInfo, onInstall?: () => void }) => {
     const [copied, setCopied] = useState(false);
@@ -66,18 +67,18 @@ const DependencyRow = ({ info, onInstall }: { info: DependencyInfo, onInstall?: 
 
 export function AboutSettings() {
     const [appName, setAppName] = useState("Loading...");
-    const [appVersion, setAppVersion] = useState("0.0.0");
     const [deps, setDeps] = useState<{ yt_dlp?: DependencyInfo, ffmpeg?: DependencyInfo, js_runtime?: DependencyInfo }>({});
     const [loading, setLoading] = useState(true);
     const [installing, setInstalling] = useState<string | null>(null);
+    const [checkingUpdate, setCheckingUpdate] = useState(false);
+
+    const { currentVersion, latestVersion, isUpdateAvailable, checkAppUpdate } = useAppContext();
 
     const fetchData = async () => {
         try {
             const name = await getName();
-            const ver = await getVersion();
             const dependencies = await checkDependencies();
             setAppName(name);
-            setAppVersion(ver);
             setDeps(dependencies);
         } catch (e) {
             console.error("Failed to fetch system info", e);
@@ -102,6 +103,12 @@ export function AboutSettings() {
         }
     };
 
+    const handleUpdateCheck = async () => {
+        setCheckingUpdate(true);
+        await checkAppUpdate();
+        setTimeout(() => setCheckingUpdate(false), 500);
+    };
+
     if (loading) {
         return <div className="p-10 text-center text-zinc-500 text-sm animate-pulse">Scanning System...</div>;
     }
@@ -111,10 +118,10 @@ export function AboutSettings() {
             {/* Header Area */}
             <div className="flex items-center gap-5 pb-4 border-b border-zinc-800">
                 <img src={icon} className="w-16 h-16 rounded-xl shadow-glow-cyan" alt="App Icon" />
-                <div>
+                <div className="flex-1">
                     <h2 className="text-xl font-bold text-zinc-100 tracking-tight">{appName}</h2>
                     <div className="flex items-center gap-2 mt-1">
-                        <span className="text-xs font-mono text-zinc-500">v{appVersion}</span>
+                        <span className="text-xs font-mono text-zinc-500">v{currentVersion}</span>
                         <span className="px-1.5 py-0.5 text-[9px] bg-theme-cyan/10 text-theme-cyan border border-theme-cyan/20 rounded uppercase font-bold tracking-wider">
                             Stable
                         </span>
@@ -126,6 +133,44 @@ export function AboutSettings() {
                         Installing {installing}...
                     </div>
                 )}
+            </div>
+
+            {/* App Update Status */}
+            <div className="bg-zinc-900/30 border border-zinc-800 p-4 rounded-lg flex items-center justify-between">
+                <div>
+                    <div className="text-sm font-medium text-zinc-200">Application Version</div>
+                    {isUpdateAvailable ? (
+                        <div className="text-xs text-theme-cyan mt-1 flex items-center gap-2">
+                             <ArrowUpCircle className="h-3 w-3" />
+                             <span>Update Available: v{latestVersion}</span>
+                        </div>
+                    ) : (
+                         <div className="text-xs text-zinc-500 mt-1">
+                             You are on the latest version.
+                         </div>
+                    )}
+                </div>
+                <div className="flex items-center gap-2">
+                    {isUpdateAvailable && (
+                        <Button 
+                            size="sm" 
+                            variant="neon" 
+                            className="h-8 text-xs"
+                            onClick={() => openExternalLink("https://github.com/zqily/multiyt-dlp/releases/latest")}
+                        >
+                            <Download className="h-3 w-3 mr-1" /> Update
+                        </Button>
+                    )}
+                    <Button 
+                        size="sm" 
+                        variant="secondary" 
+                        className="h-8 w-8 p-0" 
+                        onClick={handleUpdateCheck}
+                        title="Check for updates"
+                    >
+                        <RefreshCw className={`h-3 w-3 ${checkingUpdate ? 'animate-spin' : ''}`} />
+                    </Button>
+                </div>
             </div>
 
             {/* Dependencies Grid */}

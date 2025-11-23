@@ -5,6 +5,7 @@ import { Settings, AlertTriangle } from 'lucide-react';
 import { Button } from './ui/Button';
 import { SettingsModal } from './settings/SettingsModal';
 import { useAppContext } from '@/contexts/AppContext';
+import { UpdateToast } from './ui/UpdateToast';
 
 interface LayoutProps {
   SidebarContent: ReactNode;
@@ -18,6 +19,9 @@ export function Layout({ SidebarContent, MainContent }: LayoutProps) {
   return (
     <div className="flex h-screen overflow-hidden bg-zinc-900 text-zinc-100">
       <SettingsModal isOpen={isSettingsOpen} onClose={() => setIsSettingsOpen(false)} />
+      
+      {/* Toast Notification Layer */}
+      <UpdateToast />
       
       {/* Sidebar */}
       <aside className="w-80 flex-shrink-0 bg-zinc-900/50 border-r border-zinc-800 p-4 overflow-y-auto flex flex-col">

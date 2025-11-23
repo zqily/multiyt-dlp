@@ -148,16 +148,10 @@ pub async fn sync_dependencies(app_handle: AppHandle) -> Result<AppDependencies,
         std::fs::create_dir_all(&bin_dir).map_err(|e| e.to_string())?;
     }
 
-    // 1. Core Core: yt-dlp (Auto-Update)
     deps::auto_update_yt_dlp(app_handle.clone(), bin_dir.clone()).await?;
-
-    // 2. FFmpeg (Ensure Exists)
     deps::install_missing_ffmpeg(app_handle.clone(), bin_dir.clone()).await?;
-
-    // 3. JS Runtime (Intelligent Sync)
     deps::manage_js_runtime(app_handle.clone(), bin_dir.clone()).await?;
 
-    // 4. Return Final State
     Ok(check_dependencies(app_handle).await)
 }
 
@@ -177,4 +171,10 @@ pub fn close_splash(app_handle: AppHandle) {
         let _ = main.show();
         let _ = main.set_focus();
     }
+}
+
+// NEW: App Update Check
+#[tauri::command]
+pub async fn get_latest_app_version() -> Result<String, String> {
+    deps::get_latest_github_tag("zqily/multiyt-dlp").await
 }

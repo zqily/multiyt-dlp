@@ -22,6 +22,10 @@ export async function closeSplash(): Promise<void> {
   return await invoke("close_splash");
 }
 
+export async function getLatestAppVersion(): Promise<string> {
+    return await invoke("get_latest_app_version");
+}
+
 // --- Config API ---
 
 export async function getAppConfig(): Promise<AppConfig> {

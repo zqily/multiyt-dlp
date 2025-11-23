@@ -6,15 +6,16 @@ export interface GeneralConfig {
   template_blocks_json: string | null;
   max_concurrent_downloads: number;
   max_total_instances: number;
-  // NEW
   log_level: string;
+  // NEW
+  check_for_updates: boolean;
 }
 
 export interface PreferenceConfig {
   mode: string;
   format_preset: string;
-  video_preset: string; // NEW
-  audio_preset: string; // NEW
+  video_preset: string; 
+  audio_preset: string; 
   video_resolution: string; 
   embed_metadata: boolean;
   embed_thumbnail: boolean;
@@ -47,8 +48,6 @@ export interface AppDependencies {
   ffmpeg: DependencyInfo;
   js_runtime: DependencyInfo;
 }
-
-// ... (Keep existing AppError, Download types etc.) ...
 
 export type AppError = {
   IoError?: string;
