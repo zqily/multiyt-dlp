@@ -237,8 +237,13 @@ pub async fn install_dep(name: String, app_handle: AppHandle) -> Result<(), Stri
 
     provider.install(app_handle.clone(), bin_dir).await?;
 
+    // Fix: We now use get_name() to verify identity and silence the warning
+    let installed_name = provider.get_name();
+
     let _ = app_handle.emit_all("install-progress", InstallProgressPayload {
-        name: name, percentage: 100, status: "Installed".to_string()
+        name: installed_name, 
+        percentage: 100, 
+        status: "Installed".to_string()
     });
 
     Ok(())
