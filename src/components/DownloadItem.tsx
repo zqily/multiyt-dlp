@@ -1,10 +1,9 @@
-// src/components/DownloadItem.tsx
-
 import { Download } from '@/types';
 import { Progress } from './ui/Progress';
 import { Button } from './ui/Button';
-import { X, MonitorPlay, Clock, CheckCircle2, AlertCircle, Headphones, Activity, FileOutput, Tags, FileText, Image as ImageIcon, Hourglass } from 'lucide-react';
+import { X, MonitorPlay, Clock, CheckCircle2, AlertCircle, Headphones, Activity, FileOutput, Tags, FileText, Image as ImageIcon, Hourglass, FolderSearch } from 'lucide-react';
 import { twMerge } from 'tailwind-merge';
+import { showInFolder } from '@/api/invoke';
 
 interface DownloadItemProps {
   download: Download;
@@ -13,7 +12,7 @@ interface DownloadItemProps {
 
 export function DownloadItem({ download, onCancel }: DownloadItemProps) {
 
-  const { jobId, url, status, progress, speed, eta, error, filename, phase, preset, embedMetadata, embedThumbnail } = download;
+  const { jobId, url, status, progress, speed, eta, error, filename, phase, preset, embedMetadata, embedThumbnail, outputPath } = download;
 
   const displayTitle = filename || url;
   const isAudio = preset?.startsWith('audio');
@@ -32,7 +31,6 @@ export function DownloadItem({ download, onCancel }: DownloadItemProps) {
   };
 
   // Determine if we are in a post-processing phase
-  // Includes "Starting" and "Initializing" so the bar shows activity while yt-dlp starts up
   const isProcessingPhase = phase?.includes('Merging') 
     || phase?.includes('Extracting') 
     || phase?.includes('Fixing')
@@ -45,7 +43,7 @@ export function DownloadItem({ download, onCancel }: DownloadItemProps) {
       if (isError) return <AlertCircle className="h-5 w-5 text-theme-red" />;
       if (isCompleted) return <CheckCircle2 className="h-5 w-5 text-theme-cyan" />;
       if (isCancelled) return <X className="h-5 w-5 text-zinc-600" />;
-      if (isQueued) return <Hourglass className="h-5 w-5 text-zinc-500 animate-pulse" />; // Distinct Icon for Queue
+      if (isQueued) return <Hourglass className="h-5 w-5 text-zinc-500 animate-pulse" />;
       
       if (isMetaPhase) return <Tags className="h-5 w-5 text-yellow-400 animate-pulse" />;
       if (isProcessingPhase) return <FileOutput className="h-5 w-5 text-zinc-100 animate-pulse" />;
@@ -65,20 +63,20 @@ export function DownloadItem({ download, onCancel }: DownloadItemProps) {
       }
   }
 
+  const handleOpenFolder = () => {
+      if (outputPath) {
+          showInFolder(outputPath);
+      }
+  };
+
   return (
     <div className={twMerge(
         "group animate-fade-in relative bg-surface border rounded-lg p-5 transition-all duration-300",
-        // Styling for Active (Running) Jobs
         isActive && "border-theme-cyan/30 shadow-[0_0_20px_-10px_rgba(0,242,234,0.1)]",
-        // Styling for Processing Phase
         (isProcessingPhase || isMetaPhase) && "border-yellow-500/30 shadow-[0_0_20px_-10px_rgba(234,179,8,0.2)]",
-        // Styling for Error
         isError && "border-theme-red/30",
-        // Styling for Queued (Pending) - Dormant look
         isQueued && "border-zinc-800/60 bg-zinc-900/30 opacity-80",
-        // Cancelled
         isCancelled && "opacity-50 border-zinc-900 bg-zinc-950",
-        // Default
         (!isActive && !isError && !isQueued && !isCancelled) && "border-border"
     )}>
       
@@ -111,13 +109,12 @@ export function DownloadItem({ download, onCancel }: DownloadItemProps) {
                             isCancelled
                                 ? "border-zinc-800 text-zinc-700 bg-zinc-900"
                                 : isQueued 
-                                    ? "border-zinc-700 text-zinc-600 bg-zinc-800" // Dim badge for queued
+                                    ? "border-zinc-700 text-zinc-600 bg-zinc-800" 
                                     : isAudio 
                                         ? "border-theme-red/30 text-theme-red bg-theme-red/5" 
                                         : "border-theme-cyan/30 text-theme-cyan bg-theme-cyan/5"
                         )}>{badgeText}</span>
                         
-                        {/* Extra Flags */}
                         {embedMetadata && (
                              <span className={twMerge("px-1.5 py-0.5 rounded border flex items-center gap-1", isCancelled ? "border-zinc-800 text-zinc-700 bg-zinc-900" : "border-zinc-700 text-zinc-400 bg-zinc-800/50")} title="Metadata Embedded">
                                 <FileText className="h-3 w-3" /> TAGS
@@ -137,7 +134,6 @@ export function DownloadItem({ download, onCancel }: DownloadItemProps) {
                         )}>
                             {isActive && <Activity className={twMerge("h-3 w-3", (isProcessingPhase || isMetaPhase) && "animate-spin")} />}
                             
-                            {/* Display Logic */}
                             {phase 
                                 ? phase 
                                 : isQueued 
@@ -147,7 +143,7 @@ export function DownloadItem({ download, onCancel }: DownloadItemProps) {
                     </div>
                  </div>
 
-                 {/* Percentage / Status (Only show % if actually running) */}
+                 {/* Percentage / Status */}
                  <div className="flex flex-col items-end gap-1">
                     {isActive && (
                          <span className="text-lg font-bold text-zinc-100 tabular-nums">
@@ -169,7 +165,6 @@ export function DownloadItem({ download, onCancel }: DownloadItemProps) {
             
             {/* Progress Bar Area */}
             <div className="space-y-3">
-                {/* Active Download Bar */}
                 {isActive && (
                      <div className={twMerge("relative", (isProcessingPhase || isMetaPhase) && "opacity-80")}>
                         <Progress 
@@ -179,17 +174,14 @@ export function DownloadItem({ download, onCancel }: DownloadItemProps) {
                                 (isProcessingPhase || isMetaPhase) && "opacity-70"
                             )}
                         />
-                        {/* Indeterminate overlay for processing phases */}
                         {(isProcessingPhase || isMetaPhase) && (
                             <div className="absolute inset-0 bg-yellow-400/20 animate-pulse rounded-full" />
                         )}
                      </div>
                 )}
                 
-                {/* Queued Indeterminate Bar */}
                 {isQueued && (
                     <div className="w-full h-1 bg-zinc-900 rounded-full overflow-hidden relative">
-                         {/* Striped pattern for queued state */}
                         <div className="absolute inset-0 w-full h-full bg-[linear-gradient(45deg,transparent_25%,rgba(255,255,255,0.05)_25%,rgba(255,255,255,0.05)_50%,transparent_50%,transparent_75%,rgba(255,255,255,0.05)_75%,rgba(255,255,255,0.05)_100%)] bg-[length:20px_20px] animate-[progress-stripes_1s_linear_infinite]" />
                     </div>
                 )}
@@ -200,7 +192,6 @@ export function DownloadItem({ download, onCancel }: DownloadItemProps) {
                     </div>
                 )}
 
-                {/* Active Stats */}
                 {isActive && !isProcessingPhase && !isMetaPhase && (
                     <div className="flex items-center justify-between text-xs text-zinc-500 font-mono">
                         <span title="Speed" className="text-zinc-400 min-w-[60px]">
@@ -214,8 +205,8 @@ export function DownloadItem({ download, onCancel }: DownloadItemProps) {
             </div>
         </div>
 
-        {/* Actions - Enhanced Hover for Cancel */}
-        <div className="flex flex-col justify-center pl-2">
+        {/* Actions */}
+        <div className="flex flex-col justify-center pl-2 gap-2">
           {(isActive || isQueued) && (
              <Button 
                 variant="ghost" 
@@ -223,12 +214,24 @@ export function DownloadItem({ download, onCancel }: DownloadItemProps) {
                 onClick={() => onCancel(jobId)} 
                 className={twMerge(
                     "h-8 w-8 text-zinc-600 transition-all duration-300",
-                    "opacity-0 group-hover:opacity-100", // Hide by default, show on row hover
-                    "hover:bg-theme-red hover:text-white hover:scale-110 hover:shadow-glow-red" // Pronounced hover state
+                    "opacity-0 group-hover:opacity-100", 
+                    "hover:bg-theme-red hover:text-white hover:scale-110 hover:shadow-glow-red"
                 )}
                 title="Cancel"
              >
                 <X className="h-4 w-4" />
+              </Button>
+          )}
+
+          {isCompleted && outputPath && (
+              <Button
+                variant="ghost"
+                size="icon"
+                onClick={handleOpenFolder}
+                className="h-8 w-8 text-zinc-600 hover:text-theme-cyan hover:bg-theme-cyan/10 transition-all duration-300"
+                title="Open File Location"
+              >
+                <FolderSearch className="h-4 w-4" />
               </Button>
           )}
         </div>

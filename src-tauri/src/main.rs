@@ -115,12 +115,13 @@ fn main() {
             commands::system::open_external_link,
             commands::system::close_splash,
             commands::system::get_latest_app_version, 
+            commands::system::show_in_folder, // NEW REGISTERED COMMAND
             commands::downloader::start_download,
             commands::downloader::cancel_download,
             commands::downloader::expand_playlist,
-            commands::downloader::get_pending_jobs, // NEW
-            commands::downloader::resume_pending_jobs, // NEW
-            commands::downloader::clear_pending_jobs, // NEW
+            commands::downloader::get_pending_jobs,
+            commands::downloader::resume_pending_jobs,
+            commands::downloader::clear_pending_jobs,
             commands::config::get_app_config,
             commands::config::save_general_config,
             commands::config::save_preference_config,

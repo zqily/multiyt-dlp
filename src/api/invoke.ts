@@ -26,6 +26,10 @@ export async function getLatestAppVersion(): Promise<string> {
     return await invoke("get_latest_app_version");
 }
 
+export async function showInFolder(path: string): Promise<void> {
+    return await invoke("show_in_folder", { path });
+}
+
 // --- Config API ---
 
 export async function getAppConfig(): Promise<AppConfig> {

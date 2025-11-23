@@ -209,3 +209,38 @@ pub fn close_splash(app_handle: AppHandle) {
 pub async fn get_latest_app_version() -> Result<String, String> {
     deps::get_latest_github_tag("zqily/multiyt-dlp").await
 }
+
+// NEW: Show file in folder logic
+#[tauri::command]
+pub fn show_in_folder(path: String) -> Result<(), String> {
+    #[cfg(target_os = "windows")]
+    {
+        Command::new("explorer")
+            .args(["/select,", &path]) // Comma is important
+            .spawn()
+            .map_err(|e| e.to_string())?;
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        Command::new("open")
+            .args(["-R", &path])
+            .spawn()
+            .map_err(|e| e.to_string())?;
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        let path_obj = std::path::PathBuf::from(&path);
+        if let Some(parent) = path_obj.parent() {
+             Command::new("xdg-open")
+                .arg(parent)
+                .spawn()
+                .map_err(|e| e.to_string())?;
+        } else {
+            return Err("Could not determine parent directory".to_string());
+        }
+    }
+
+    Ok(())
+}

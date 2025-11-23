@@ -1,6 +1,7 @@
 import { Download } from '@/types';
-import { X, CheckCircle2, AlertCircle, Hourglass, MonitorPlay, Headphones, Tags, FileOutput, Image as ImageIcon, Activity } from 'lucide-react';
+import { X, CheckCircle2, AlertCircle, Hourglass, MonitorPlay, Headphones, Tags, FileOutput, Image as ImageIcon, Activity, FolderSearch } from 'lucide-react';
 import { twMerge } from 'tailwind-merge';
+import { showInFolder } from '@/api/invoke';
 
 interface DownloadGridItemProps {
   download: Download;
@@ -8,7 +9,7 @@ interface DownloadGridItemProps {
 }
 
 export function DownloadGridItem({ download, onCancel }: DownloadGridItemProps) {
-  const { jobId, status, progress, error, phase, preset, embedThumbnail, embedMetadata, filename, url } = download;
+  const { jobId, status, progress, error, phase, preset, embedThumbnail, embedMetadata, filename, url, outputPath } = download;
 
   const isAudio = preset?.startsWith('audio');
   const displayTitle = filename || url;
@@ -56,7 +57,6 @@ export function DownloadGridItem({ download, onCancel }: DownloadGridItemProps) 
     return isAudio ? <Headphones className="h-6 w-6" /> : <MonitorPlay className="h-6 w-6" />;
   };
 
-  // Badge Logic
   let badgeText = isAudio ? 'AUDIO' : 'VIDEO';
   if (preset) {
       const parts = preset.split('_');
@@ -86,10 +86,9 @@ export function DownloadGridItem({ download, onCancel }: DownloadGridItemProps) 
             <div className="absolute inset-0 w-full h-full bg-[linear-gradient(45deg,transparent_25%,rgba(255,255,255,0.03)_25%,rgba(255,255,255,0.03)_50%,transparent_50%,transparent_75%,rgba(255,255,255,0.03)_75%,rgba(255,255,255,0.03)_100%)] bg-[length:20px_20px] animate-[progress-stripes_2s_linear_infinite] pointer-events-none" />
         )}
 
-        {/* Content Layer (Visible when NOT hovering) */}
+        {/* Content Layer */}
         <div className="z-10 relative flex flex-col items-center justify-center group-hover:opacity-0 transition-opacity duration-200">
             {isActive && !isProcessingPhase && !isMetaPhase ? (
-                // Show Percentage when actively downloading
                 <div className="flex flex-col items-center animate-fade-in">
                     <span className="text-xl font-black tracking-tighter tabular-nums">
                         {progress.toFixed(0)}<span className="text-xs font-normal opacity-70">%</span>
@@ -97,29 +96,40 @@ export function DownloadGridItem({ download, onCancel }: DownloadGridItemProps) 
                     <Activity className="h-3 w-3 mt-1 animate-pulse opacity-50" />
                 </div>
             ) : (
-                // Show Icon otherwise
                 <div className={twMerge("transition-transform duration-300", isActive && "animate-pulse")}>
                     <IconComponent />
                 </div>
             )}
         </div>
 
-        {/* HOVER OVERLAY: Context Menu / Info */}
+        {/* HOVER OVERLAY */}
         <div className="absolute inset-0 bg-zinc-950/90 backdrop-blur-sm opacity-0 group-hover:opacity-100 transition-all duration-200 z-20 flex flex-col p-3 text-left">
             
-            {/* Top Right: Cancel Action */}
-            {(isActive || isQueued || isError) && (
-                <button 
-                    onClick={(e) => { e.stopPropagation(); onCancel(jobId); }}
-                    className="absolute top-2 right-2 p-1.5 rounded-full bg-zinc-800 hover:bg-theme-red hover:text-white text-zinc-400 transition-colors shadow-lg z-30"
-                    title="Cancel Download"
-                >
-                    <X className="h-3 w-3" />
-                </button>
-            )}
+            {/* Top Right: Actions */}
+            <div className="absolute top-2 right-2 flex gap-2 z-30">
+                {isCompleted && outputPath && (
+                    <button
+                        onClick={(e) => { e.stopPropagation(); showInFolder(outputPath); }}
+                        className="p-1.5 rounded-full bg-zinc-800 hover:bg-theme-cyan hover:text-black text-zinc-400 transition-colors shadow-lg"
+                        title="Open File Location"
+                    >
+                        <FolderSearch className="h-3 w-3" />
+                    </button>
+                )}
+
+                {(isActive || isQueued || isError) && (
+                    <button 
+                        onClick={(e) => { e.stopPropagation(); onCancel(jobId); }}
+                        className="p-1.5 rounded-full bg-zinc-800 hover:bg-theme-red hover:text-white text-zinc-400 transition-colors shadow-lg"
+                        title="Cancel Download"
+                    >
+                        <X className="h-3 w-3" />
+                    </button>
+                )}
+            </div>
 
             {/* Title */}
-            <div className="text-[10px] font-bold text-zinc-100 leading-tight line-clamp-2 pr-6 mb-auto break-all">
+            <div className="text-[10px] font-bold text-zinc-100 leading-tight line-clamp-2 pr-12 mb-auto break-all">
                 {displayTitle}
             </div>
 
