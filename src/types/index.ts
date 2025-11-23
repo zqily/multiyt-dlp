@@ -103,6 +103,7 @@ export interface Download {
   filenameTemplate?: string;
   embedMetadata?: boolean; 
   embedThumbnail?: boolean;
+  restrictFilenames?: boolean; // NEW
 }
 
 export type TemplateBlockType = 'variable' | 'separator' | 'text';

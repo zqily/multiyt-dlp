@@ -53,7 +53,8 @@ export async function startDownload(
   videoResolution: string, 
   embedMetadata: boolean,
   embedThumbnail: boolean,
-  filenameTemplate: string
+  filenameTemplate: string,
+  restrictFilenames: boolean = false // NEW
 ): Promise<string> {
   return await invoke("start_download", { 
     url, 
@@ -62,7 +63,8 @@ export async function startDownload(
     videoResolution,
     embedMetadata,
     embedThumbnail,
-    filenameTemplate
+    filenameTemplate,
+    restrictFilenames
   });
 }
 

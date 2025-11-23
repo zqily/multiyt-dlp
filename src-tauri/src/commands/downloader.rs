@@ -69,6 +69,7 @@ pub async fn start_download(
     embed_metadata: bool,
     embed_thumbnail: bool,
     filename_template: String,
+    restrict_filenames: Option<bool>, // NEW: Optional flag from frontend
     app_handle: AppHandle,
     manager: State<'_, Arc<Mutex<JobManager>>>,
 ) -> Result<Uuid, AppError> {
@@ -97,6 +98,7 @@ pub async fn start_download(
         embed_metadata,
         embed_thumbnail,
         filename_template: safe_template,
+        restrict_filenames: restrict_filenames.unwrap_or(false), // Default to false unless manually set
     };
 
     manager.lock().unwrap().add_job(job_data, app_handle)?;

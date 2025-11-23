@@ -54,6 +54,7 @@ function App() {
         removeDownload(job.jobId);
         
         // Start a fresh download with preserved settings
+        // FORCE restrictFilenames to true for manual retries
         startDownload(
             job.url,
             job.downloadPath,
@@ -61,7 +62,8 @@ function App() {
             job.videoResolution || 'best',
             job.embedMetadata || false,
             job.embedThumbnail || false,
-            job.filenameTemplate || "%(title)s.%(ext)s"
+            job.filenameTemplate || "%(title)s.%(ext)s",
+            true // <--- FORCE SAFE FILENAMES ON MANUAL RETRY
         );
     });
   };

@@ -57,6 +57,8 @@ pub struct QueuedJob {
     pub embed_metadata: bool,
     pub embed_thumbnail: bool,
     pub filename_template: String,
+    // NEW: Flag to force ASCII filenames
+    pub restrict_filenames: bool,
 }
 
 // --- Playlist Expansion ---

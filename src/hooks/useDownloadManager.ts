@@ -59,7 +59,8 @@ export function useDownloadManager() {
     videoResolution: string,
     embedMetadata: boolean = false,
     embedThumbnail: boolean = false,
-    filenameTemplate: string
+    filenameTemplate: string,
+    restrictFilenames: boolean = false // NEW
   ) => {
     try {
       const jobId = await apiStartDownload(
@@ -69,7 +70,8 @@ export function useDownloadManager() {
           videoResolution, 
           embedMetadata, 
           embedThumbnail,
-          filenameTemplate
+          filenameTemplate,
+          restrictFilenames
       ); 
       
       setDownloads((prev) => {
@@ -85,7 +87,8 @@ export function useDownloadManager() {
           downloadPath,
           filenameTemplate,
           embedMetadata,
-          embedThumbnail
+          embedThumbnail,
+          restrictFilenames
         });
         return newMap;
       });
