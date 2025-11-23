@@ -100,6 +100,7 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             commands::system::check_dependencies,
             commands::system::install_dependency,
+            commands::system::sync_dependencies, // NEW
             commands::system::open_external_link,
             commands::system::close_splash,
             commands::downloader::start_download,

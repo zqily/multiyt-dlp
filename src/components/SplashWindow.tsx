@@ -1,11 +1,11 @@
 import { useState, useEffect, useRef } from 'react';
-import { checkDependencies, installDependency, closeSplash } from '@/api/invoke';
+import { syncDependencies, closeSplash } from '@/api/invoke';
 import { listen } from '@tauri-apps/api/event';
 import { getVersion } from '@tauri-apps/api/app';
 import icon from '@/assets/icon.png';
-import { DownloadCloud, Check, AlertTriangle } from 'lucide-react';
-import { Button } from './ui/Button';
+import { RefreshCw, AlertTriangle, ShieldCheck } from 'lucide-react';
 import { Progress } from './ui/Progress';
+import { Button } from './ui/Button';
 
 interface InstallProgress {
     name: string;
@@ -14,66 +14,46 @@ interface InstallProgress {
 }
 
 export function SplashWindow() {
-  const [status, setStatus] = useState<'loading' | 'error' | 'ready' | 'installing'>('loading');
+  const [status, setStatus] = useState<'init' | 'syncing' | 'ready' | 'error'>('init');
   const [message, setMessage] = useState('Initializing Core...');
-  const [missingDeps, setMissingDeps] = useState<{ yt_dlp: boolean; ffmpeg: boolean }>({ yt_dlp: false, ffmpeg: false });
   const [installState, setInstallState] = useState<InstallProgress>({ name: '', percentage: 0, status: '' });
   const [appVersion, setAppVersion] = useState('');
+  const [errorDetails, setErrorDetails] = useState('');
   
   const hasRun = useRef(false);
 
-  const runChecks = async () => {
+  const startStartupSync = async () => {
     if (hasRun.current) return;
     hasRun.current = true;
 
-    setStatus('loading');
-    setMessage('Scanning System Environment...');
+    setStatus('syncing');
+    setMessage('Checking System Integrity...');
     
     try {
-      await new Promise(resolve => setTimeout(resolve, 800));
-      const deps = await checkDependencies();
+      // Allow the UI to render the 'Syncing' state briefly before heavy lifting
+      await new Promise(resolve => setTimeout(resolve, 500));
       
-      const ytMissing = !deps.yt_dlp.available;
-      const ffmpegMissing = !deps.ffmpeg.available;
+      // Call the all-in-one sync command
+      const finalDeps = await syncDependencies();
 
-      if (ytMissing || ffmpegMissing) {
-        setMissingDeps({
-          yt_dlp: ytMissing,
-          ffmpeg: ffmpegMissing
-        });
-        setStatus('error');
-        setMessage('Dependencies Missing');
-      } else {
-        setStatus('ready');
-        setMessage('System Optimal. Launching...');
-        setTimeout(async () => {
-            await closeSplash();
-        }, 800);
+      // Check critical failures
+      if (!finalDeps.yt_dlp.available || !finalDeps.ffmpeg.available) {
+          throw new Error("Critical dependencies failed to install.");
       }
+
+      setStatus('ready');
+      setMessage('System Optimal. Launching...');
+      
+      setTimeout(async () => {
+          await closeSplash();
+      }, 800);
+
     } catch (e) {
+      console.error(e);
       setStatus('error');
-      setMessage('Initialization Failed');
+      setMessage('Startup Failed');
+      setErrorDetails(String(e));
     }
-  };
-
-  const handleAutoInstall = async () => {
-      setStatus('installing');
-      try {
-          if (missingDeps.yt_dlp) {
-              setInstallState({ name: 'yt-dlp', percentage: 0, status: 'Starting...' });
-              await installDependency('yt-dlp');
-          }
-          if (missingDeps.ffmpeg) {
-              setInstallState({ name: 'ffmpeg', percentage: 0, status: 'Starting...' });
-              await installDependency('ffmpeg');
-          }
-          // Re-run checks
-          hasRun.current = false;
-          runChecks();
-      } catch (e) {
-          setStatus('error');
-          setMessage('Installation Failed: ' + String(e));
-      }
   };
 
   useEffect(() => {
@@ -81,11 +61,12 @@ export function SplashWindow() {
 
     const unlisten = listen<InstallProgress>('install-progress', (event) => {
         setInstallState(event.payload);
+        setStatus('syncing'); // Ensure we show syncing UI during events
     });
 
     const img = new Image();
     img.src = icon;
-    const startApp = () => { requestAnimationFrame(() => { runChecks(); }); };
+    const startApp = () => { requestAnimationFrame(() => { startStartupSync(); }); };
 
     if (img.complete) startApp();
     else { img.onload = startApp; img.onerror = startApp; }
@@ -106,45 +87,63 @@ export function SplashWindow() {
             <h1 className={`font-mono font-bold text-lg tracking-wider uppercase transition-colors duration-300 ${
                 status === 'error' ? 'text-theme-red' : 'text-theme-cyan'
             }`}>
-                {status === 'loading' ? 'Loading...' : status === 'installing' ? 'Installing...' : status === 'error' ? 'Action Required' : 'Ready'}
+                {status === 'init' && 'Initializing'}
+                {status === 'syncing' && 'Syncing Resources'}
+                {status === 'ready' && 'Ready'}
+                {status === 'error' && 'Critical Error'}
             </h1>
-            <p className="text-zinc-500 text-xs font-medium">{message}</p>
+            <p className="text-zinc-500 text-xs font-medium min-h-[16px]">{message}</p>
         </div>
 
-        {status === 'installing' && (
-            <div className="w-full space-y-2 animate-fade-in bg-black/50 p-4 rounded-lg border border-zinc-800 backdrop-blur-sm">
-                <div className="flex justify-between text-xs text-zinc-300 mb-1">
-                    <span className="font-bold uppercase">{installState.name}</span>
-                    <span>{installState.status}</span>
+        {/* Syncing Progress UI */}
+        {status === 'syncing' && (
+            <div className="w-full space-y-3 animate-fade-in bg-black/50 p-4 rounded-lg border border-zinc-800 backdrop-blur-sm">
+                <div className="flex items-center gap-2 text-xs text-zinc-300">
+                    <RefreshCw className="h-3 w-3 animate-spin text-theme-cyan" />
+                    <span className="font-bold uppercase">{installState.name || 'Core System'}</span>
                 </div>
-                <Progress value={installState.percentage} className="h-1.5" />
+                
+                {installState.status && (
+                    <div className="text-[10px] text-zinc-500 font-mono truncate">
+                        {installState.status}
+                    </div>
+                )}
+                
+                <Progress value={installState.percentage || 0} className="h-1" />
             </div>
         )}
 
+        {/* Ready UI */}
+        {status === 'ready' && (
+             <div className="flex items-center gap-2 text-emerald-500 animate-fade-in bg-emerald-500/10 px-4 py-2 rounded-full border border-emerald-500/20">
+                <ShieldCheck className="h-4 w-4" />
+                <span className="text-xs font-bold uppercase tracking-wider">Integrity Verified</span>
+             </div>
+        )}
+
+        {/* Error UI */}
         {status === 'error' && (
-            <div className="w-full space-y-3 animate-fade-in bg-black/50 p-4 rounded-lg border border-zinc-800 backdrop-blur-sm">
-                <div className="space-y-2">
-                     <div className="flex items-center justify-between text-xs">
-                        <span className="text-zinc-400">yt-dlp</span>
-                        {missingDeps.yt_dlp ? <span className="text-theme-red font-bold flex items-center gap-1"><AlertTriangle className="h-3 w-3"/> Missing</span> : <Check className="h-3 w-3 text-emerald-500" />}
-                     </div>
-                     <div className="flex items-center justify-between text-xs">
-                        <span className="text-zinc-400">FFmpeg</span>
-                        {missingDeps.ffmpeg ? <span className="text-theme-red font-bold flex items-center gap-1"><AlertTriangle className="h-3 w-3"/> Missing</span> : <Check className="h-3 w-3 text-emerald-500" />}
-                     </div>
+            <div className="w-full space-y-3 animate-fade-in bg-black/50 p-4 rounded-lg border border-theme-red/30 backdrop-blur-sm">
+                <div className="flex items-center gap-2 text-theme-red text-xs font-bold uppercase">
+                    <AlertTriangle className="h-4 w-4" />
+                    <span>Sync Failed</span>
+                </div>
+                <div className="text-[10px] text-zinc-400 font-mono bg-zinc-900 p-2 rounded border border-zinc-800 break-all">
+                    {errorDetails || "Unknown error occurred during startup sync."}
                 </div>
                 
                 <Button 
                     size="sm" 
-                    className="w-full mt-2 border-theme-cyan/50 bg-theme-cyan/10 text-theme-cyan hover:bg-theme-cyan/20"
-                    onClick={handleAutoInstall}
+                    className="w-full mt-2"
+                    onClick={() => { hasRun.current = false; startStartupSync(); }}
                 >
-                    <DownloadCloud className="mr-2 h-3 w-3" /> Download & Install
+                    Retry Sync
                 </Button>
             </div>
         )}
 
-        {status === 'loading' && (
+        {/* Initial Loading Spinner */}
+        {status === 'init' && (
             <div className="w-32 h-1 bg-zinc-900 rounded-full overflow-hidden">
                 <div className="h-full bg-theme-cyan animate-[shimmer_1s_infinite_linear] w-full origin-left scale-x-50" />
             </div>

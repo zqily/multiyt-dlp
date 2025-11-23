@@ -4,7 +4,8 @@ use std::path::PathBuf;
 use tauri::{AppHandle, Manager};
 use futures_util::StreamExt;
 use serde::Serialize;
-use reqwest::Client;
+use reqwest::{Client, header};
+use std::process::Command;
 use async_trait::async_trait;
 
 // --- Constants ---
@@ -30,7 +31,6 @@ const DENO_URL: &str = "https://github.com/denoland/deno/releases/latest/downloa
 #[cfg(target_os = "linux")]
 const DENO_URL: &str = "https://github.com/denoland/deno/releases/latest/download/deno-x86_64-unknown-linux-gnu.zip";
 
-
 // --- Types ---
 
 #[derive(Clone, Serialize)]
@@ -47,18 +47,45 @@ pub trait DependencyProvider: Send + Sync {
     async fn install(&self, app_handle: AppHandle, target_dir: PathBuf) -> Result<(), String>;
 }
 
-// --- Downloader Helper ---
+// --- Network Helpers ---
+
+fn get_http_client() -> Result<Client, String> {
+    Client::builder()
+        .user_agent("Multiyt-dlp/2.0 (github.com/zqil/multiyt-dlp)")
+        .build()
+        .map_err(|e| e.to_string())
+}
+
+async fn get_latest_github_tag(repo: &str) -> Result<String, String> {
+    let client = get_http_client()?;
+    let url = format!("https://api.github.com/repos/{}/releases/latest", repo);
+    
+    let resp = client.get(&url)
+        .header(header::ACCEPT, "application/vnd.github.v3+json")
+        .send()
+        .await
+        .map_err(|e| format!("Network error: {}", e))?;
+
+    if !resp.status().is_success() {
+        return Err(format!("GitHub API Error: {}", resp.status()));
+    }
+
+    let json: serde_json::Value = resp.json().await.map_err(|e| e.to_string())?;
+    
+    json.get("tag_name")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string())
+        .ok_or_else(|| "Could not find tag_name in response".to_string())
+}
 
 async fn download_file(url: &str, dest: &PathBuf, name: &str, app_handle: &AppHandle) -> Result<(), String> {
-    let client = Client::new();
+    let client = get_http_client()?;
     let res = client.get(url).send().await.map_err(|e| e.to_string())?;
     
     let total_size = res.content_length().unwrap_or(0);
     let mut file = File::create(dest).map_err(|e| e.to_string())?;
     let mut stream = res.bytes_stream();
     let mut downloaded: u64 = 0;
-
-    // Throttle event emission to avoid flooding the frontend channel
     let mut last_emit = 0;
 
     while let Some(item) = stream.next().await {
@@ -68,7 +95,8 @@ async fn download_file(url: &str, dest: &PathBuf, name: &str, app_handle: &AppHa
 
         if total_size > 0 {
             let percentage = (downloaded * 100) / total_size;
-            if percentage > last_emit + 1 || percentage == 100 {
+            // Emit every 5% or when done to reduce IPC traffic
+            if percentage >= last_emit + 5 || percentage == 100 {
                 last_emit = percentage;
                 let _ = app_handle.emit_all("install-progress", InstallProgressPayload {
                     name: name.to_string(),
@@ -78,8 +106,35 @@ async fn download_file(url: &str, dest: &PathBuf, name: &str, app_handle: &AppHa
             }
         }
     }
-
     Ok(())
+}
+
+// --- Logic Helpers ---
+
+// Helper to create a command that doesn't spawn a visible window on Windows
+fn new_silent_command(program: &str) -> Command {
+    let mut cmd = Command::new(program);
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+    }
+    cmd
+}
+
+fn get_local_version(path: &PathBuf, arg: &str) -> Option<String> {
+    if !path.exists() { return None; }
+    
+    let output = new_silent_command(path.to_str()?)
+        .arg(arg)
+        .output()
+        .ok()?;
+
+    if !output.status.success() { return None; }
+    
+    let out_str = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    // Simple cleaning: 2023.01.01 or v1.0.0
+    Some(out_str)
 }
 
 // --- Extraction Helpers ---
@@ -212,6 +267,132 @@ impl DependencyProvider for DenoProvider {
     }
 }
 
+// --- Intelligent Update Logic ---
+
+pub async fn auto_update_yt_dlp(app_handle: AppHandle, bin_dir: PathBuf) -> Result<(), String> {
+    let provider = YtDlpProvider;
+    let binary_name = provider.get_binaries()[0];
+    let local_path = bin_dir.join(binary_name);
+
+    // 1. Get Remote Version
+    let remote_tag = match get_latest_github_tag("yt-dlp/yt-dlp").await {
+        Ok(t) => t,
+        Err(e) => {
+            println!("Skipping yt-dlp update check due to network: {}", e);
+            // If we don't have it installed locally, this is a failure. If we do, just skip update.
+            if !local_path.exists() {
+                return Err(e);
+            }
+            return Ok(());
+        }
+    };
+
+    // 2. Get Local Version
+    if let Some(local_ver) = get_local_version(&local_path, "--version") {
+        // Simple string compare often works for dates (2023.01.01), 
+        // but if remote is != local, we update to be safe.
+        if local_ver.trim() == remote_tag.trim() {
+            println!("yt-dlp is up to date ({})", local_ver);
+            return Ok(());
+        }
+    }
+
+    // 3. Install/Update
+    let _ = app_handle.emit_all("install-progress", InstallProgressPayload {
+        name: "yt-dlp".to_string(),
+        percentage: 0,
+        status: format!("Updating to {}...", remote_tag)
+    });
+    
+    provider.install(app_handle, bin_dir).await
+}
+
+pub async fn manage_js_runtime(app_handle: AppHandle, bin_dir: PathBuf) -> Result<(), String> {
+    
+    // Strategy:
+    // 1. Check System Deno -> If exists, try `deno upgrade`.
+    // 2. Check System Bun -> If exists, try `bun upgrade`.
+    // 3. Check System Node -> If exists, leave alone.
+    // 4. Fallback -> Check Local Portable Deno (in bin_dir) -> Install/Update via GitHub.
+
+    // 1. System Deno
+    if new_silent_command("deno").arg("--version").output().is_ok() {
+        let _ = app_handle.emit_all("install-progress", InstallProgressPayload {
+            name: "System Deno".to_string(), percentage: 50, status: "Checking updates...".to_string()
+        });
+        // Attempt upgrade, ignore failure (might be permission issue)
+        let _ = new_silent_command("deno").arg("upgrade").output(); 
+        return Ok(());
+    }
+
+    // 2. System Bun
+    if new_silent_command("bun").arg("--version").output().is_ok() {
+        let _ = app_handle.emit_all("install-progress", InstallProgressPayload {
+            name: "System Bun".to_string(), percentage: 50, status: "Checking updates...".to_string()
+        });
+        let _ = new_silent_command("bun").arg("upgrade").output();
+        return Ok(());
+    }
+
+    // 3. System Node
+    if new_silent_command("node").arg("--version").output().is_ok() {
+        // Do nothing for Node
+        return Ok(());
+    }
+
+    // 4. Portable Deno (Local)
+    let provider = DenoProvider;
+    let binary_name = provider.get_binaries()[0];
+    let local_path = bin_dir.join(binary_name);
+
+    let remote_tag = match get_latest_github_tag("denoland/deno").await {
+        Ok(t) => t,
+        Err(e) => {
+             // If local missing, fatal. Else, skip.
+             if !local_path.exists() { return Err(e); }
+             return Ok(());
+        }
+    };
+    
+    let clean_remote = remote_tag.replace("v", ""); // v1.37.0 -> 1.37.0
+
+    if let Some(local_ver_raw) = get_local_version(&local_path, "--version") {
+        // Output is usually "deno 1.37.0 (release...)"
+        if local_ver_raw.contains(&clean_remote) {
+            return Ok(());
+        }
+    }
+
+    let _ = app_handle.emit_all("install-progress", InstallProgressPayload {
+        name: "Portable Runtime".to_string(),
+        percentage: 0,
+        status: format!("Syncing Deno {}...", clean_remote)
+    });
+
+    provider.install(app_handle, bin_dir).await
+}
+
+pub async fn install_missing_ffmpeg(app_handle: AppHandle, bin_dir: PathBuf) -> Result<(), String> {
+    let provider = FfmpegProvider;
+    // We only verify main binary for existence check
+    let binary_name = provider.get_binaries()[0]; 
+    let local_path = bin_dir.join(binary_name);
+    
+    // Also check system path
+    let exec_name = if cfg!(windows) { "ffmpeg.exe" } else { "ffmpeg" };
+    if new_silent_command(exec_name).arg("-version").output().is_ok() {
+        return Ok(()); // Exists on system
+    }
+
+    if !local_path.exists() {
+         let _ = app_handle.emit_all("install-progress", InstallProgressPayload {
+            name: "ffmpeg".to_string(), percentage: 0, status: "Installing...".to_string()
+        });
+        provider.install(app_handle, bin_dir).await?;
+    }
+    Ok(())
+}
+
 // --- Factory ---
 
 pub fn get_provider(name: &str) -> Option<Box<dyn DependencyProvider>> {
@@ -223,7 +404,7 @@ pub fn get_provider(name: &str) -> Option<Box<dyn DependencyProvider>> {
     }
 }
 
-// --- Manager Logic ---
+// --- Old Manager Logic (kept for manual installs if needed) ---
 
 pub async fn install_dep(name: String, app_handle: AppHandle) -> Result<(), String> {
     let provider = get_provider(&name).ok_or("Unknown dependency")?;
@@ -237,7 +418,6 @@ pub async fn install_dep(name: String, app_handle: AppHandle) -> Result<(), Stri
 
     provider.install(app_handle.clone(), bin_dir).await?;
 
-    // Fix: We now use get_name() to verify identity and silence the warning
     let installed_name = provider.get_name();
 
     let _ = app_handle.emit_all("install-progress", InstallProgressPayload {

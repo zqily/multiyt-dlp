@@ -74,7 +74,7 @@ fn resolve_binary_info(bin_name: &str, version_flag: &str, local_bin_path: &Path
 
 #[tauri::command]
 pub async fn check_dependencies(app_handle: AppHandle) -> AppDependencies {
-    let app_dir = app_handle.path_resolver().app_data_dir().unwrap(); // Should exist by now
+    let app_dir = app_handle.path_resolver().app_data_dir().unwrap();
     let bin_dir = app_dir.join("bin");
 
     tauri::async_runtime::spawn_blocking(move || {
@@ -137,6 +137,28 @@ pub async fn check_dependencies(app_handle: AppHandle) -> AppDependencies {
 #[tauri::command]
 pub async fn install_dependency(app_handle: AppHandle, name: String) -> Result<(), String> {
     deps::install_dep(name, app_handle).await
+}
+
+#[tauri::command]
+pub async fn sync_dependencies(app_handle: AppHandle) -> Result<AppDependencies, String> {
+    let app_dir = app_handle.path_resolver().app_data_dir().ok_or("Failed to get app dir")?;
+    let bin_dir = app_dir.join("bin");
+
+    if !bin_dir.exists() {
+        std::fs::create_dir_all(&bin_dir).map_err(|e| e.to_string())?;
+    }
+
+    // 1. Core Core: yt-dlp (Auto-Update)
+    deps::auto_update_yt_dlp(app_handle.clone(), bin_dir.clone()).await?;
+
+    // 2. FFmpeg (Ensure Exists)
+    deps::install_missing_ffmpeg(app_handle.clone(), bin_dir.clone()).await?;
+
+    // 3. JS Runtime (Intelligent Sync)
+    deps::manage_js_runtime(app_handle.clone(), bin_dir.clone()).await?;
+
+    // 4. Return Final State
+    Ok(check_dependencies(app_handle).await)
 }
 
 #[tauri::command]

@@ -10,6 +10,10 @@ export async function installDependency(name: string): Promise<void> {
     return await invoke("install_dependency", { name });
 }
 
+export async function syncDependencies(): Promise<AppDependencies> {
+    return await invoke("sync_dependencies");
+}
+
 export async function openExternalLink(url: string): Promise<void> {
   return await invoke("open_external_link", { url });
 }
