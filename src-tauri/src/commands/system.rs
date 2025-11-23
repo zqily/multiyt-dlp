@@ -31,7 +31,7 @@ fn new_silent_command(program: &str) -> Command {
     cmd
 }
 
-fn resolve_binary_info(bin_name: &str, version_flag: &str, local_bin_path: &PathBuf) -> DependencyInfo {
+pub fn resolve_binary_info(bin_name: &str, version_flag: &str, local_bin_path: &PathBuf) -> DependencyInfo {
     // 1. Check Local Bin Folder First
     let local_path = local_bin_path.join(bin_name);
     let local_available = local_path.exists();
@@ -72,6 +72,33 @@ fn resolve_binary_info(bin_name: &str, version_flag: &str, local_bin_path: &Path
     }
 }
 
+/// Public helper to get the best available JS runtime info (Name, Path)
+/// Prioritizes Deno -> Bun -> Node
+pub fn get_js_runtime_info(bin_path: &PathBuf) -> Option<(String, String)> {
+    // 1. Check for Deno (Preferred)
+    let deno_exec = if cfg!(windows) { "deno.exe" } else { "deno" };
+    let deno = resolve_binary_info(deno_exec, "--version", bin_path);
+    if deno.available {
+        return Some(("deno".to_string(), deno.path.unwrap()));
+    }
+
+    // 2. Check for Bun
+    let bun_exec = if cfg!(windows) { "bun.exe" } else { "bun" };
+    let bun = resolve_binary_info(bun_exec, "--version", bin_path);
+    if bun.available {
+        return Some(("bun".to_string(), bun.path.unwrap()));
+    }
+
+    // 3. Check for Node
+    let node_exec = if cfg!(windows) { "node.exe" } else { "node" };
+    let node = resolve_binary_info(node_exec, "--version", bin_path);
+    if node.available {
+        return Some(("node".to_string(), node.path.unwrap()));
+    }
+
+    None
+}
+
 #[tauri::command]
 pub async fn check_dependencies(app_handle: AppHandle) -> AppDependencies {
     let app_dir = app_handle.path_resolver().app_data_dir().unwrap();
@@ -94,12 +121,13 @@ pub async fn check_dependencies(app_handle: AppHandle) -> AppDependencies {
             }
         }
 
-        // 3. JS Runtime
+        // 3. JS Runtime (Using shared helper)
         let mut js_runtime = DependencyInfo { 
             name: "None".to_string(), available: false, version: None, path: None 
         };
 
-        // Check local deno first
+        // Check specific binaries again to populate full DependencyInfo including version
+        // (The helper just returns name/path for process injection)
         let deno_exec = if cfg!(windows) { "deno.exe" } else { "deno" };
         let local_deno = resolve_binary_info(deno_exec, "--version", &bin_path);
 
@@ -107,12 +135,15 @@ pub async fn check_dependencies(app_handle: AppHandle) -> AppDependencies {
             js_runtime = local_deno;
             js_runtime.name = "deno".to_string();
         } else {
-            // Fallback to system
-            let runtimes = [("deno", "--version"), ("node", "--version"), ("bun", "--version")];
+            let runtimes = [("bun", "--version"), ("node", "--version")];
             for (bin, flag) in runtimes {
-                let info = resolve_binary_info(bin, flag, &bin_path); // path check is redundant but safe
+                // Windows check handled inside resolve_binary_info via simple name passing? 
+                // We need to append .exe manually for resolve_binary_info if we want exact local check
+                let bin_name = if cfg!(windows) { format!("{}.exe", bin) } else { bin.to_string() };
+                let info = resolve_binary_info(&bin_name, flag, &bin_path);
                 if info.available {
                     js_runtime = info;
+                    js_runtime.name = bin.to_string();
                     break;
                 }
             }

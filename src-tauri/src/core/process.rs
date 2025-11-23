@@ -10,6 +10,7 @@ use std::path::PathBuf;
 
 use crate::core::manager::JobManager;
 use crate::models::{DownloadCompletePayload, DownloadErrorPayload, DownloadProgressPayload, DownloadFormatPreset, QueuedJob, JobStatus};
+use crate::commands::system::get_js_runtime_info; // Import the helper
 
 // --- Regex Definitions ---
 static PROGRESS_REGEX: Lazy<Regex> = Lazy::new(|| Regex::new(r"\[download\]\s+(?P<percentage>[\d\.]+)%\s+of\s+~?\s*(?P<size>[^\s]+)(?:\s+at\s+(?P<speed>[^\s]+(?:\s+B/s)?))?(?:\s+ETA\s+(?P<eta>[^\s]+))?").unwrap());
@@ -80,6 +81,13 @@ pub async fn run_download_process(
         cmd.env("PYTHONUTF8", "1");
         cmd.env("PYTHONIOENCODING", "utf-8");
         cmd.current_dir(&downloads_dir);
+
+        // --- AUTO-INJECT JS RUNTIME ---
+        if let Some((name, path)) = get_js_runtime_info(&bin_dir) {
+            // Example: --js-runtimes "deno:C:\Users\...\deno.exe"
+            cmd.arg("--js-runtimes");
+            cmd.arg(format!("{}:{}", name, path));
+        }
 
         cmd.arg(&url)
             .arg("-o")
