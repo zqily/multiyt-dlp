@@ -9,13 +9,13 @@ use crate::core::{
 };
 use crate::models::{DownloadFormatPreset, QueuedJob, PlaylistResult, PlaylistEntry, JobStatus};
 
-#[tauri::command]
-pub async fn expand_playlist(url: String) -> Result<PlaylistResult, AppError> {
+// Helper: Probes the URL to see if it's a playlist or single video
+fn probe_url(url: &str) -> Result<Vec<PlaylistEntry>, AppError> {
     let mut cmd = Command::new("yt-dlp");
     cmd.arg("--flat-playlist")
        .arg("--dump-single-json")
        .arg("--no-warnings")
-       .arg(&url);
+       .arg(url);
 
     // SILENCE WINDOW ON WINDOWS
     #[cfg(target_os = "windows")]
@@ -41,22 +41,29 @@ pub async fn expand_playlist(url: String) -> Result<PlaylistResult, AppError> {
 
     if let Some(entries_arr) = parsed.get("entries").and_then(|e| e.as_array()) {
         for entry in entries_arr {
-            if let Some(url) = entry.get("url").and_then(|s| s.as_str()) {
+            if let Some(u) = entry.get("url").and_then(|s| s.as_str()) {
                 entries.push(PlaylistEntry {
                     id: entry.get("id").and_then(|s| s.as_str()).map(|s| s.to_string()),
-                    url: url.to_string(),
+                    url: u.to_string(),
                     title: entry.get("title").and_then(|s| s.as_str()).unwrap_or("Unknown").to_string(),
                 });
             }
         }
     } else {
+        // Fallback for single video
         entries.push(PlaylistEntry {
             id: parsed.get("id").and_then(|s| s.as_str()).map(|s| s.to_string()),
-            url: parsed.get("webpage_url").and_then(|s| s.as_str()).unwrap_or(&url).to_string(),
+            url: parsed.get("webpage_url").and_then(|s| s.as_str()).unwrap_or(url).to_string(),
             title: parsed.get("title").and_then(|s| s.as_str()).unwrap_or("Unknown").to_string(),
         });
     }
 
+    Ok(entries)
+}
+
+#[tauri::command]
+pub async fn expand_playlist(url: String) -> Result<PlaylistResult, AppError> {
+    let entries = probe_url(&url)?;
     Ok(PlaylistResult { entries })
 }
 
@@ -69,10 +76,10 @@ pub async fn start_download(
     embed_metadata: bool,
     embed_thumbnail: bool,
     filename_template: String,
-    restrict_filenames: Option<bool>, // NEW: Optional flag from frontend
+    restrict_filenames: Option<bool>,
     app_handle: AppHandle,
     manager: State<'_, Arc<Mutex<JobManager>>>,
-) -> Result<Uuid, AppError> {
+) -> Result<Vec<Uuid>, AppError> { // CHANGED: Now returns Vec<Uuid>
     
     if !url.starts_with("http://") && !url.starts_with("https://") {
         return Err(AppError::ValidationFailed("Invalid URL provided.".into()));
@@ -87,23 +94,35 @@ pub async fn start_download(
         filename_template
     };
 
-    let job_id = Uuid::new_v4();
-    
-    let job_data = QueuedJob {
-        id: job_id,
-        url: url.clone(),
-        download_path,
-        format_preset,
-        video_resolution,
-        embed_metadata,
-        embed_thumbnail,
-        filename_template: safe_template,
-        restrict_filenames: restrict_filenames.unwrap_or(false), // Default to false unless manually set
-    };
+    // 1. Probe the URL (Expand if playlist)
+    // This is blocking IO but inside an async command (running on thread pool), so it's acceptable.
+    let entries = probe_url(&url)?;
 
-    manager.lock().unwrap().add_job(job_data, app_handle)?;
+    let mut created_job_ids = Vec::new();
+    let mut manager_lock = manager.lock().unwrap();
 
-    Ok(job_id)
+    // 2. Queue all found entries
+    for entry in entries {
+        let job_id = Uuid::new_v4();
+        
+        let job_data = QueuedJob {
+            id: job_id,
+            url: entry.url, // Use the specific video URL found by probe
+            download_path: download_path.clone(),
+            format_preset: format_preset.clone(),
+            video_resolution: video_resolution.clone(),
+            embed_metadata,
+            embed_thumbnail,
+            filename_template: safe_template.clone(),
+            restrict_filenames: restrict_filenames.unwrap_or(false),
+        };
+
+        // This triggers process_queue internally if slots are available
+        manager_lock.add_job(job_data, app_handle.clone())?;
+        created_job_ids.push(job_id);
+    }
+
+    Ok(created_job_ids)
 }
 
 #[tauri::command]

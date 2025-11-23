@@ -60,10 +60,11 @@ export function useDownloadManager() {
     embedMetadata: boolean = false,
     embedThumbnail: boolean = false,
     filenameTemplate: string,
-    restrictFilenames: boolean = false // NEW
+    restrictFilenames: boolean = false
   ) => {
     try {
-      const jobId = await apiStartDownload(
+      // API now returns an array of IDs (one for single video, multiple for playlist)
+      const jobIds = await apiStartDownload(
           url, 
           downloadPath, 
           formatPreset,
@@ -76,24 +77,29 @@ export function useDownloadManager() {
       
       setDownloads((prev) => {
         const newMap = new Map(prev);
-        newMap.set(jobId, {
-          jobId,
-          url,
-          status: 'pending',
-          progress: 0,
-          // Save config for potential retry
-          preset: formatPreset,
-          videoResolution,
-          downloadPath,
-          filenameTemplate,
-          embedMetadata,
-          embedThumbnail,
-          restrictFilenames
+        
+        jobIds.forEach(jobId => {
+            newMap.set(jobId, {
+              jobId,
+              url, // Initial URL (might be playlist URL for all, which is fine)
+              status: 'pending',
+              progress: 0,
+              // Save config for potential retry
+              preset: formatPreset,
+              videoResolution,
+              downloadPath,
+              filenameTemplate,
+              embedMetadata,
+              embedThumbnail,
+              restrictFilenames
+            });
         });
+        
         return newMap;
       });
     } catch (error) {
       console.error('Failed to start download:', error);
+      throw error; // Re-throw so UI can handle loading state or error alerts
     }
   }, []);
 

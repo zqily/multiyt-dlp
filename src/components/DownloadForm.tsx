@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { Button } from './ui/Button';
 import { Card, CardContent } from './ui/Card';
 import { Download, FolderOpen, Link2, MonitorPlay, Headphones, FileText, Image as ImageIcon, AlertTriangle, Loader2 } from 'lucide-react';
-import { selectDirectory, expandPlaylist } from '@/api/invoke';
+import { selectDirectory } from '@/api/invoke';
 import { DownloadFormatPreset, PreferenceConfig } from '@/types';
 import { useAppContext } from '@/contexts/AppContext';
 import { twMerge } from 'tailwind-merge';
@@ -16,7 +16,7 @@ interface DownloadFormProps {
       embedMeta: boolean,
       embedThumbnail: boolean,
       filenameTemplate: string
-    ) => void;
+    ) => Promise<void>; // Changed to Promise to support loading state
 }
 
 type DownloadMode = 'video' | 'audio';
@@ -90,7 +90,7 @@ export function DownloadForm({ onDownload }: DownloadFormProps) {
   } = useAppContext();
   
   const [url, setUrl] = useState('');
-  const [isExpanding, setIsExpanding] = useState(false);
+  const [isProcessing, setIsProcessing] = useState(false);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -104,33 +104,28 @@ export function DownloadForm({ onDownload }: DownloadFormProps) {
         if (!confirmed) return;
     }
 
-    setIsExpanding(true);
+    setIsProcessing(true);
 
     try {
-        // Expand Playlist/URL logic
-        const expanded = await expandPlaylist(url);
-        
         const template = getTemplateString();
         
-        // Loop through results and queue them
-        for (const entry of expanded.entries) {
-            onDownload(
-                entry.url, 
-                defaultDownloadPath || undefined, 
-                preferences.format_preset as DownloadFormatPreset,
-                preferences.video_resolution,
-                preferences.embed_metadata, 
-                preferences.embed_thumbnail, 
-                template
-            );
-        }
+        // Just call onDownload. The backend now handles expansion/probing.
+        await onDownload(
+            url, 
+            defaultDownloadPath || undefined, 
+            preferences.format_preset as DownloadFormatPreset,
+            preferences.video_resolution,
+            preferences.embed_metadata, 
+            preferences.embed_thumbnail, 
+            template
+        );
 
         setUrl('');
     } catch (err) {
-        console.error("Failed to expand playlist or start download", err);
-        alert("Failed to process URL. Check logs.");
+        console.error("Failed to start download", err);
+        // Error is logged by hook, potentially show alert here
     } finally {
-        setIsExpanding(false);
+        setIsProcessing(false);
     }
   };
 
@@ -146,8 +141,6 @@ export function DownloadForm({ onDownload }: DownloadFormProps) {
   };
   
   const handleModeChange = (newMode: DownloadMode) => {
-    // When switching modes, retrieve the saved preset for that specific mode
-    // If not found (old config), fallback to defaults
     let targetPreset = '';
     
     if (newMode === 'video') {
@@ -162,7 +155,6 @@ export function DownloadForm({ onDownload }: DownloadFormProps) {
   const handlePresetChange = (newValue: string) => {
       const updates: Partial<PreferenceConfig> = { format_preset: newValue };
       
-      // Update the persistent storage for the current mode
       if (currentMode === 'video') {
           updates.video_preset = newValue;
       } else {
@@ -201,7 +193,7 @@ export function DownloadForm({ onDownload }: DownloadFormProps) {
                     type="text"
                     value={url}
                     onChange={(e) => setUrl(e.target.value)}
-                    disabled={isExpanding}
+                    disabled={isProcessing}
                     placeholder="https://youtube.com/watch?v=... or Playlist URL"
                     className={twMerge(
                         "relative w-full bg-surfaceHighlight border rounded-md pl-10 pr-4 py-2.5 text-sm text-zinc-100 placeholder-zinc-700 focus:outline-none focus:ring-1 transition-all",
@@ -334,10 +326,10 @@ export function DownloadForm({ onDownload }: DownloadFormProps) {
             <Button 
                 type="submit" 
                 variant="default"
-                disabled={!isValidUrl || isExpanding} 
+                disabled={!isValidUrl || isProcessing} 
                 className="w-full h-12 text-base uppercase tracking-wide font-black shadow-lg shadow-theme-cyan/20"
             >
-                {isExpanding ? (
+                {isProcessing ? (
                     <>
                         <Loader2 className="mr-2 h-5 w-5 animate-spin" />
                         Analyzing...

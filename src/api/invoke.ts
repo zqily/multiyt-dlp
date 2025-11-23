@@ -54,8 +54,8 @@ export async function startDownload(
   embedMetadata: boolean,
   embedThumbnail: boolean,
   filenameTemplate: string,
-  restrictFilenames: boolean = false // NEW
-): Promise<string> {
+  restrictFilenames: boolean = false
+): Promise<string[]> { // CHANGED: Returns Array of strings (UUIDs)
   return await invoke("start_download", { 
     url, 
     downloadPath, 
