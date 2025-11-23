@@ -6,7 +6,8 @@ use tauri::{AppHandle, Manager};
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::Command;
 use tokio::sync::mpsc;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::fs;
 
 use crate::core::manager::JobManager;
 use crate::config::ConfigManager;
@@ -25,6 +26,14 @@ static FIXUP_REGEX: Lazy<Regex> = Lazy::new(|| Regex::new(r"^\[(?:Fixup\w+)\]").
 static TITLE_CLEANER_REGEX: Lazy<Regex> = Lazy::new(|| Regex::new(r"\s\[[a-zA-Z0-9_-]{11}\]\.(?:f[0-9]+\.)?[a-z0-9]+$").unwrap());
 static FILESYSTEM_ERROR_REGEX: Lazy<Regex> = Lazy::new(|| Regex::new(r"(?i)(No such file|Invalid argument|cannot be written|WinError 123|Postprocessing: Error opening input files)").unwrap());
 
+/// Robust move: Tries rename (fast), falls back to copy+delete (slow, for cross-drive)
+fn robust_move_file(src: &Path, dest: &Path) -> Result<(), std::io::Error> {
+    if let Err(_) = fs::rename(src, dest) {
+        fs::copy(src, dest)?;
+        fs::remove_file(src)?;
+    }
+    Ok(())
+}
 
 pub async fn run_download_process(
     mut job_data: QueuedJob,
@@ -44,7 +53,8 @@ pub async fn run_download_process(
         let app_dir = app_handle.path_resolver().app_data_dir().unwrap();
         let bin_dir = app_dir.join("bin");
         
-        let downloads_dir = if let Some(ref path) = job_data.download_path {
+        // 1. Determine Target Destination (Where the user WANTS the file)
+        let target_dir = if let Some(ref path) = job_data.download_path {
             PathBuf::from(path)
         } else {
             match tauri::api::path::download_dir() {
@@ -56,9 +66,19 @@ pub async fn run_download_process(
             }
         };
         
-        if !downloads_dir.exists() {
-            if let Err(e) = std::fs::create_dir_all(&downloads_dir) {
-                emit_error(job_id, format!("Failed to create download directory: {}", e), &app_handle, &manager);
+        if !target_dir.exists() {
+            if let Err(e) = std::fs::create_dir_all(&target_dir) {
+                emit_error(job_id, format!("Failed to create target directory: {}", e), &app_handle, &manager);
+                return;
+            }
+        }
+
+        // 2. Determine Temp Directory (Where execution HAPPENS)
+        let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
+        let temp_dir = home.join(".multiyt-dlp").join("temp_downloads");
+        if !temp_dir.exists() {
+            if let Err(e) = std::fs::create_dir_all(&temp_dir) {
+                emit_error(job_id, format!("Failed to create temp directory: {}", e), &app_handle, &manager);
                 return;
             }
         }
@@ -80,7 +100,9 @@ pub async fn run_download_process(
         
         cmd.env("PYTHONUTF8", "1");
         cmd.env("PYTHONIOENCODING", "utf-8");
-        cmd.current_dir(&downloads_dir);
+        
+        // IMPORTANT: Run inside the temp directory
+        cmd.current_dir(&temp_dir);
 
         // --- AUTO-INJECT JS RUNTIME ---
         if let Some((name, path)) = get_js_runtime_info(&bin_dir) {
@@ -89,7 +111,6 @@ pub async fn run_download_process(
         }
 
         // --- COOKIES INJECTION ---
-        // Priority: File > Browser > None
         if let Some(cookie_path) = &general_config.cookies_path {
             if !cookie_path.trim().is_empty() {
                 cmd.arg("--cookies").arg(cookie_path);
@@ -229,7 +250,7 @@ pub async fn run_download_process(
         drop(tx);
 
         let mut state_clean_title: Option<String> = None;
-        let mut state_final_filepath: Option<String> = None;
+        let mut state_final_filename: Option<String> = None; // Just the filename, no path
         let mut state_percentage: f32 = 0.0;
         let mut state_phase: String = "Initializing".to_string();
         let mut captured_logs = Vec::new();
@@ -244,14 +265,17 @@ pub async fn run_download_process(
             }
         };
 
-        let extract_title = |path_str: &str| -> Option<String> {
-            let path = std::path::Path::new(path_str);
-            if let Some(name_os) = path.file_name() {
-                let name_str = name_os.to_string_lossy().to_string();
-                let cleaned = TITLE_CLEANER_REGEX.replace(&name_str, "");
+        let extract_filename_from_path = |path_str: &str| -> Option<String> {
+            Path::new(path_str).file_name()
+                .map(|os| os.to_string_lossy().to_string())
+        };
+
+        let extract_clean_title = |path_str: &str| -> Option<String> {
+             if let Some(fname) = extract_filename_from_path(path_str) {
+                let cleaned = TITLE_CLEANER_REGEX.replace(&fname, "");
                 return Some(cleaned.to_string());
-            }
-            None
+             }
+             None
         };
 
         while let Some(line) = rx.recv().await {
@@ -267,7 +291,9 @@ pub async fn run_download_process(
 
             if let Some(caps) = METADATA_REGEX.captures(trimmed) {
                 release_network_slot(&manager, &app_handle, &mut network_slot_released);
-                if let Some(f) = caps.name("filename") { state_final_filepath = Some(f.as_str().to_string()); }
+                if let Some(f) = caps.name("filename") { 
+                    state_final_filename = extract_filename_from_path(f.as_str());
+                }
                 state_phase = "Writing Metadata".to_string();
                 state_percentage = 99.0;
                 emit_update = true;
@@ -281,8 +307,8 @@ pub async fn run_download_process(
             else if let Some(caps) = MERGER_REGEX.captures(trimmed) {
                 release_network_slot(&manager, &app_handle, &mut network_slot_released);
                 if let Some(f) = caps.name("filename") {
-                    state_final_filepath = Some(f.as_str().to_string());
-                    state_clean_title = extract_title(f.as_str()).or(state_clean_title);
+                    state_final_filename = extract_filename_from_path(f.as_str());
+                    state_clean_title = extract_clean_title(f.as_str()).or(state_clean_title);
                 }
                 state_phase = "Merging Formats".to_string();
                 state_percentage = 100.0;
@@ -292,8 +318,8 @@ pub async fn run_download_process(
             else if let Some(caps) = EXTRACT_AUDIO_REGEX.captures(trimmed) {
                 release_network_slot(&manager, &app_handle, &mut network_slot_released);
                 if let Some(f) = caps.name("filename") {
-                    state_final_filepath = Some(f.as_str().to_string());
-                    state_clean_title = extract_title(f.as_str()).or(state_clean_title);
+                    state_final_filename = extract_filename_from_path(f.as_str());
+                    state_clean_title = extract_clean_title(f.as_str()).or(state_clean_title);
                 }
                 state_phase = "Extracting Audio".to_string();
                 state_percentage = 100.0;
@@ -308,8 +334,8 @@ pub async fn run_download_process(
             else if let Some(caps) = ALREADY_DOWNLOADED_REGEX.captures(trimmed) {
                 release_network_slot(&manager, &app_handle, &mut network_slot_released);
                 if let Some(f) = caps.name("filename") {
-                    state_final_filepath = Some(f.as_str().to_string());
-                    state_clean_title = extract_title(f.as_str()).or(state_clean_title);
+                    state_final_filename = extract_filename_from_path(f.as_str());
+                    state_clean_title = extract_clean_title(f.as_str()).or(state_clean_title);
                 }
                 state_phase = "Finished".to_string();
                 state_percentage = 100.0;
@@ -318,9 +344,9 @@ pub async fn run_download_process(
             }
             else if let Some(caps) = DESTINATION_REGEX.captures(trimmed) {
                 if let Some(f) = caps.name("filename") {
-                    let full_path = f.as_str().to_string();
-                    if state_clean_title.is_none() { state_clean_title = extract_title(&full_path); }
-                    state_final_filepath = Some(full_path);
+                    let full_path_str = f.as_str();
+                    if state_clean_title.is_none() { state_clean_title = extract_clean_title(full_path_str); }
+                    state_final_filename = extract_filename_from_path(full_path_str);
                     state_phase = "Downloading".to_string();
                     emit_update = true;
                 }
@@ -375,17 +401,63 @@ pub async fn run_download_process(
         drop(manager_lock);
 
         if status.success() {
-            let mut manager_lock = manager.lock().unwrap();
-            let output = state_final_filepath.unwrap_or_else(|| "Unknown".to_string());
-            manager_lock.update_job_status(job_id, JobStatus::Completed).ok();
-            let _ = app_handle.emit_all("download-complete", DownloadCompletePayload {
-                job_id,
-                output_path: output,
-            });
-            manager_lock.remove_job(job_id);
-            drop(manager_lock);
-            break;
+            // SUCCESS: Move file from TEMP to TARGET
+            if let Some(filename) = state_final_filename {
+                let src_path = temp_dir.join(&filename);
+                let dest_path = target_dir.join(&filename);
+                
+                if src_path.exists() {
+                    match robust_move_file(&src_path, &dest_path) {
+                        Ok(_) => {
+                            let mut manager_lock = manager.lock().unwrap();
+                            manager_lock.update_job_status(job_id, JobStatus::Completed).ok();
+                            let _ = app_handle.emit_all("download-complete", DownloadCompletePayload {
+                                job_id,
+                                output_path: dest_path.to_string_lossy().to_string(),
+                            });
+                            manager_lock.remove_job(job_id);
+                            drop(manager_lock);
+                            break;
+                        },
+                        Err(e) => {
+                            // Move failed
+                            let mut manager_lock = manager.lock().unwrap();
+                            manager_lock.update_job_status(job_id, JobStatus::Error).ok();
+                            let _ = app_handle.emit_all("download-error", DownloadErrorPayload {
+                                job_id,
+                                error: format!("Download successful, but failed to move to destination: {}", e),
+                            });
+                            manager_lock.remove_job(job_id);
+                            drop(manager_lock);
+                            break;
+                        }
+                    }
+                } else {
+                    // File missing in temp?
+                     let mut manager_lock = manager.lock().unwrap();
+                     manager_lock.update_job_status(job_id, JobStatus::Error).ok();
+                     let _ = app_handle.emit_all("download-error", DownloadErrorPayload {
+                         job_id,
+                         error: "Output file not found in temporary directory.".to_string(),
+                     });
+                     manager_lock.remove_job(job_id);
+                     drop(manager_lock);
+                     break;
+                }
+            } else {
+                // Could not determine filename
+                let mut manager_lock = manager.lock().unwrap();
+                manager_lock.update_job_status(job_id, JobStatus::Error).ok();
+                let _ = app_handle.emit_all("download-error", DownloadErrorPayload {
+                    job_id,
+                    error: "Download finished, but filename could not be determined.".to_string(),
+                });
+                manager_lock.remove_job(job_id);
+                drop(manager_lock);
+                break;
+            }
         } else {
+            // FAIL
             let log_blob = captured_logs.join("\n");
             let is_filesystem_error = FILESYSTEM_ERROR_REGEX.is_match(&log_blob);
             

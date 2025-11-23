@@ -2,6 +2,7 @@ use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex};
 use tauri::{AppHandle, Manager};
 use uuid::Uuid;
+use std::fs;
 use crate::{models::{Job, JobStatus, QueuedJob}, core::error::AppError, config::ConfigManager};
 use crate::core::process::run_download_process;
 
@@ -97,7 +98,34 @@ impl JobManager {
         if self.active_process_instances > 0 {
             self.active_process_instances -= 1;
             println!("Instance slot released. Total Instances: {}", self.active_process_instances);
+            
             self.process_queue(app_handle);
+
+            // Auto-cleanup Temp Directory if completely idle
+            if self.active_process_instances == 0 && self.queue.is_empty() {
+                self.clean_temp_directory();
+            }
+        }
+    }
+
+    fn clean_temp_directory(&self) {
+        let home = dirs::home_dir().unwrap_or_else(|| std::path::PathBuf::from("."));
+        let temp_dir = home.join(".multiyt-dlp").join("temp_downloads");
+        
+        if temp_dir.exists() {
+            println!("Cleaning temp directory: {:?}", temp_dir);
+            if let Ok(entries) = fs::read_dir(&temp_dir) {
+                for entry in entries {
+                    if let Ok(entry) = entry {
+                        let path = entry.path();
+                        if path.is_dir() {
+                            let _ = fs::remove_dir_all(path);
+                        } else {
+                            let _ = fs::remove_file(path);
+                        }
+                    }
+                }
+            }
         }
     }
 

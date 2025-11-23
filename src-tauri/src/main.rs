@@ -5,6 +5,8 @@ use std::sync::{Arc, Mutex};
 use tauri::{Manager, WindowEvent};
 use tokio::sync::mpsc;
 use std::time::Duration;
+use std::fs;
+use std::path::{Path, PathBuf};
 
 use crate::core::manager::JobManager;
 use crate::config::ConfigManager;
@@ -15,7 +17,42 @@ mod core;
 mod models;
 mod config;
 
+// Helper for Panic Save
+fn panic_save_temp_files(dest_dir: &Path) {
+    let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
+    let temp_dir = home.join(".multiyt-dlp").join("temp_downloads");
+
+    if !temp_dir.exists() { return; }
+    if !dest_dir.exists() { let _ = fs::create_dir_all(dest_dir); }
+
+    println!("Emergency Panic Save triggered. Moving files from {:?} to {:?}", temp_dir, dest_dir);
+
+    if let Ok(entries) = fs::read_dir(&temp_dir) {
+        for entry in entries {
+            if let Ok(entry) = entry {
+                let path = entry.path();
+                if let Some(filename) = path.file_name() {
+                    let dest_path = dest_dir.join(filename);
+                    // Try rename, fallback to copy
+                    if let Err(_) = fs::rename(&path, &dest_path) {
+                        if let Ok(_) = fs::copy(&path, &dest_path) {
+                            let _ = fs::remove_file(&path);
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
 fn main() {
+    // Initialize Temp Dir structure at startup
+    let home = dirs::home_dir().expect("Could not find home directory");
+    let temp_dir = home.join(".multiyt-dlp").join("temp_downloads");
+    if !temp_dir.exists() {
+        let _ = fs::create_dir_all(&temp_dir);
+    }
+
     let config_manager = Arc::new(ConfigManager::new());
     let initial_config = config_manager.get_config();
     
@@ -26,6 +63,8 @@ fn main() {
     let config_manager_setup = config_manager.clone();
     let config_manager_event = config_manager.clone();
     let config_manager_saver = config_manager.clone();
+    // Clone for exit handler
+    let config_manager_exit = config_manager.clone();
 
     let (tx_save, mut rx_save) = mpsc::unbounded_channel::<()>();
 
@@ -63,6 +102,8 @@ fn main() {
         .on_window_event(move |event| {
             if let WindowEvent::Destroyed = event.event() {
                 let window_label = event.window().label();
+                
+                // Handle Splash Screen close -> Exit if main not ready
                 if window_label == "splashscreen" {
                     let app_handle = event.window().app_handle();
                     if let Some(main) = app_handle.get_window("main") {
@@ -72,6 +113,24 @@ fn main() {
                     } else {
                         app_handle.exit(0);
                     }
+                }
+
+                // Handle Main Window Close -> Trigger Panic Save & Exit
+                if window_label == "main" {
+                    let cfg = config_manager_exit.get_config().general;
+                    
+                    // Determine download path for panic save
+                    let save_path = if let Some(p) = cfg.download_path {
+                        PathBuf::from(p)
+                    } else {
+                        tauri::api::path::download_dir().unwrap_or_else(|| PathBuf::from("."))
+                    };
+
+                    // SYNCHRONOUS Panic Save before exit
+                    panic_save_temp_files(&save_path);
+                    
+                    // Ensure we actually exit
+                    event.window().app_handle().exit(0);
                 }
             }
 
@@ -99,7 +158,7 @@ fn main() {
             commands::system::sync_dependencies,
             commands::system::open_external_link,
             commands::system::close_splash,
-            commands::system::get_latest_app_version, // NEW
+            commands::system::get_latest_app_version, 
             commands::downloader::start_download,
             commands::downloader::cancel_download,
             commands::downloader::expand_playlist,
