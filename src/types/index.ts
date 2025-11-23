@@ -1,5 +1,3 @@
-// --- Config Types ---
-
 export interface GeneralConfig {
   download_path: string | null;
   filename_template: string;
@@ -7,7 +5,6 @@ export interface GeneralConfig {
   max_concurrent_downloads: number;
   max_total_instances: number;
   log_level: string;
-  // NEW
   check_for_updates: boolean;
 }
 
@@ -98,7 +95,12 @@ export interface Download {
   error?: string;
   filename?: string;
   phase?: string;
+  
+  // Config saved for Retry logic
   preset?: DownloadFormatPreset; 
+  videoResolution?: string;
+  downloadPath?: string;
+  filenameTemplate?: string;
   embedMetadata?: boolean; 
   embedThumbnail?: boolean;
 }

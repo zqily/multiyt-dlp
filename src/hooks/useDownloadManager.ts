@@ -1,5 +1,3 @@
-// src/hooks/useDownloadManager.ts
-
 import { useState, useEffect, useCallback } from 'react';
 import { listen } from '@tauri-apps/api/event';
 import { Download, DownloadCompletePayload, DownloadErrorPayload, DownloadProgressPayload, DownloadFormatPreset } from '@/types';
@@ -58,7 +56,7 @@ export function useDownloadManager() {
     url: string, 
     downloadPath: string | undefined, 
     formatPreset: DownloadFormatPreset = 'best',
-    videoResolution: string, // NEW: Added this argument
+    videoResolution: string,
     embedMetadata: boolean = false,
     embedThumbnail: boolean = false,
     filenameTemplate: string
@@ -68,7 +66,7 @@ export function useDownloadManager() {
           url, 
           downloadPath, 
           formatPreset,
-          videoResolution, // Pass to API
+          videoResolution, 
           embedMetadata, 
           embedThumbnail,
           filenameTemplate
@@ -81,7 +79,11 @@ export function useDownloadManager() {
           url,
           status: 'pending',
           progress: 0,
+          // Save config for potential retry
           preset: formatPreset,
+          videoResolution,
+          downloadPath,
+          filenameTemplate,
           embedMetadata,
           embedThumbnail
         });
@@ -102,5 +104,14 @@ export function useDownloadManager() {
     }
   }, []);
 
-  return { downloads, startDownload, cancelDownload };
+  // Used to clear finished jobs or remove jobs before retrying
+  const removeDownload = useCallback((jobId: string) => {
+      setDownloads((prev) => {
+          const newMap = new Map(prev);
+          newMap.delete(jobId);
+          return newMap;
+      });
+  }, []);
+
+  return { downloads, startDownload, cancelDownload, removeDownload };
 }

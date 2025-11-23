@@ -5,12 +5,12 @@ import { DownloadQueue } from './components/DownloadQueue';
 import { useDownloadManager } from './hooks/useDownloadManager';
 import { Layout } from './components/Layout';
 import { SplashWindow } from './components/SplashWindow';
-import { Activity, CheckCircle2, AlertCircle, List, Database, Hourglass, LayoutGrid } from 'lucide-react';
+import { Activity, CheckCircle2, AlertCircle, List, Database, Hourglass, LayoutGrid, Trash2, RefreshCw } from 'lucide-react';
 
 function App() {
   const [windowLabel, setWindowLabel] = useState<string | null>(null);
   const [viewMode, setViewMode] = useState<'list' | 'grid'>('list');
-  const { downloads, startDownload, cancelDownload } = useDownloadManager();
+  const { downloads, startDownload, cancelDownload, removeDownload } = useDownloadManager();
   
   // Track previous count to handle auto-switching logic cleanly
   const prevCountRef = useRef(0);
@@ -39,6 +39,37 @@ function App() {
       return <SplashWindow />;
   }
 
+  // --- ACTIONS ---
+
+  const handleClearCompleted = () => {
+    const completedJobs = Array.from(downloads.values()).filter(d => d.status === 'completed');
+    completedJobs.forEach(job => removeDownload(job.jobId));
+  };
+
+  const handleRetryFailed = () => {
+    const failedJobs = Array.from(downloads.values()).filter(d => d.status === 'error');
+    
+    failedJobs.forEach(job => {
+        // Remove the error entry first
+        removeDownload(job.jobId);
+        
+        // Start a fresh download with preserved settings
+        startDownload(
+            job.url,
+            job.downloadPath,
+            job.preset || 'best',
+            job.videoResolution || 'best',
+            job.embedMetadata || false,
+            job.embedThumbnail || false,
+            job.filenameTemplate || "%(title)s.%(ext)s"
+        );
+    });
+  };
+
+  const toggleViewMode = () => {
+      setViewMode(prev => prev === 'list' ? 'grid' : 'list');
+  };
+
   // --- MAIN APP ROUTE ---
 
   // Calculate Stats
@@ -47,10 +78,6 @@ function App() {
   const queued = Array.from(downloads.values()).filter(d => d.status === 'pending').length;
   const completed = Array.from(downloads.values()).filter(d => d.status === 'completed').length;
   const failed = Array.from(downloads.values()).filter(d => d.status === 'error').length;
-
-  const toggleViewMode = () => {
-      setViewMode(prev => prev === 'list' ? 'grid' : 'list');
-  };
 
   return (
       <Layout
@@ -118,22 +145,48 @@ function App() {
                         
                         <div className="w-px h-8 bg-zinc-800" />
                         
-                        <div className="flex flex-col items-end">
-                            <span className="text-[10px] text-zinc-600 uppercase tracking-wider font-bold">Done</span>
-                            <div className="flex items-center gap-1.5 text-zinc-200 font-mono">
-                                <CheckCircle2 className="h-3 w-3 text-emerald-500" />
-                                {completed}
+                        {/* DONE Column with Clear Overlay */}
+                        <div className="group relative flex flex-col items-end cursor-pointer min-w-[40px]">
+                            <div className="flex flex-col items-end group-hover:opacity-0 transition-opacity duration-200">
+                                <span className="text-[10px] text-zinc-600 uppercase tracking-wider font-bold">Done</span>
+                                <div className="flex items-center gap-1.5 text-zinc-200 font-mono">
+                                    <CheckCircle2 className="h-3 w-3 text-emerald-500" />
+                                    {completed}
+                                </div>
                             </div>
+                            
+                            {completed > 0 && (
+                                <button 
+                                    onClick={handleClearCompleted}
+                                    className="absolute inset-0 hidden group-hover:flex items-center justify-center bg-zinc-900/90 backdrop-blur-sm border border-zinc-800 rounded shadow-lg animate-fade-in hover:border-emerald-500/50 hover:bg-zinc-800"
+                                    title="Clear Completed"
+                                >
+                                    <Trash2 className="h-4 w-4 text-emerald-500" />
+                                </button>
+                            )}
                         </div>
                         
                         <div className="w-px h-8 bg-zinc-800" />
                         
-                        <div className="flex flex-col items-end">
-                            <span className="text-[10px] text-zinc-600 uppercase tracking-wider font-bold">Failed</span>
-                            <div className="flex items-center gap-1.5 text-zinc-200 font-mono">
-                                <AlertCircle className="h-3 w-3 text-theme-red" />
-                                {failed}
+                        {/* FAILED Column with Retry Overlay */}
+                        <div className="group relative flex flex-col items-end cursor-pointer min-w-[40px]">
+                            <div className="flex flex-col items-end group-hover:opacity-0 transition-opacity duration-200">
+                                <span className="text-[10px] text-zinc-600 uppercase tracking-wider font-bold">Failed</span>
+                                <div className="flex items-center gap-1.5 text-zinc-200 font-mono">
+                                    <AlertCircle className="h-3 w-3 text-theme-red" />
+                                    {failed}
+                                </div>
                             </div>
+
+                            {failed > 0 && (
+                                <button 
+                                    onClick={handleRetryFailed}
+                                    className="absolute inset-0 hidden group-hover:flex items-center justify-center bg-zinc-900/90 backdrop-blur-sm border border-zinc-800 rounded shadow-lg animate-fade-in hover:border-theme-red/50 hover:bg-zinc-800"
+                                    title="Retry Failed"
+                                >
+                                    <RefreshCw className="h-4 w-4 text-theme-red" />
+                                </button>
+                            )}
                         </div>
                     </div>
                 </div>
