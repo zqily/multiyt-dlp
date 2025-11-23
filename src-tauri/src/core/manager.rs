@@ -3,13 +3,19 @@ use std::sync::{Arc, Mutex};
 use tauri::{AppHandle, Manager};
 use uuid::Uuid;
 use std::fs;
+use std::path::PathBuf;
 use crate::{models::{Job, JobStatus, QueuedJob}, core::error::AppError, config::ConfigManager};
 use crate::core::process::run_download_process;
 
 pub struct JobManager {
+    // Runtime State
     jobs: HashMap<Uuid, Job>,
     queue: VecDeque<QueuedJob>,
     
+    // Persistence Registry: Keeps track of the config for ALL active/queued jobs
+    // This is what gets saved to jobs.json
+    persistence_registry: HashMap<Uuid, QueuedJob>,
+
     // Concurrency Counters
     active_network_jobs: u32,
     active_process_instances: u32,
@@ -20,8 +26,24 @@ impl JobManager {
         Self {
             jobs: HashMap::new(),
             queue: VecDeque::new(),
+            persistence_registry: HashMap::new(),
             active_network_jobs: 0,
             active_process_instances: 0,
+        }
+    }
+
+    fn get_persistence_path() -> PathBuf {
+        let home = dirs::home_dir().expect("Could not find home directory");
+        home.join(".multiyt-dlp").join("jobs.json")
+    }
+
+    fn save_state(&self) {
+        let path = Self::get_persistence_path();
+        // Convert registry values to a vector for saving
+        let jobs: Vec<&QueuedJob> = self.persistence_registry.values().collect();
+        
+        if let Ok(json) = serde_json::to_string_pretty(&jobs) {
+             let _ = fs::write(path, json);
         }
     }
 
@@ -33,6 +55,11 @@ impl JobManager {
 
         let job = Job::new(job_data.url.clone());
         self.jobs.insert(job_data.id, job);
+        
+        // Add to persistence registry and Save
+        self.persistence_registry.insert(job_data.id, job_data.clone());
+        self.save_state();
+
         self.queue.push_back(job_data);
 
         // Attempt to start jobs immediately if slots are open
@@ -44,7 +71,6 @@ impl JobManager {
     // Called whenever a slot might open up (add_job, network_finished, process_finished)
     pub fn process_queue(&mut self, app_handle: AppHandle) {
         // Retrieve limits from config
-        // Note: In a real high-perf scenario, we might cache these, but here it's safer to read fresh
         let config_manager = app_handle.state::<Arc<ConfigManager>>();
         let config = config_manager.get_config().general;
 
@@ -101,14 +127,17 @@ impl JobManager {
             
             self.process_queue(app_handle);
 
-            // Auto-cleanup Temp Directory if completely idle
+            // Auto-cleanup Temp Directory if completely idle AND queue is empty
             if self.active_process_instances == 0 && self.queue.is_empty() {
-                self.clean_temp_directory();
+                // Only clean if persistence is empty too (fully done)
+                if self.persistence_registry.is_empty() {
+                     self.clean_temp_directory();
+                }
             }
         }
     }
 
-    fn clean_temp_directory(&self) {
+    pub fn clean_temp_directory(&self) {
         let home = dirs::home_dir().unwrap_or_else(|| std::path::PathBuf::from("."));
         let temp_dir = home.join(".multiyt-dlp").join("temp_downloads");
         
@@ -159,5 +188,8 @@ impl JobManager {
 
     pub fn remove_job(&mut self, id: Uuid) {
         self.jobs.remove(&id);
+        // Also remove from persistence and save
+        self.persistence_registry.remove(&id);
+        self.save_state();
     }
 }

@@ -10,7 +10,7 @@ pub enum JobStatus {
     Error,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)] // Added Deserialize
 #[serde(rename_all = "snake_case")]
 pub enum DownloadFormatPreset {
     // Video + Audio (Merged)
@@ -47,7 +47,7 @@ impl Job {
 
 // --- Queue Struct ---
 // Holds all data needed to spawn the process later
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)] // Added Serialize, Deserialize
 pub struct QueuedJob {
     pub id: Uuid,
     pub url: String,
@@ -57,7 +57,6 @@ pub struct QueuedJob {
     pub embed_metadata: bool,
     pub embed_thumbnail: bool,
     pub filename_template: String,
-    // NEW: Flag to force ASCII filenames
     pub restrict_filenames: bool,
 }
 

@@ -2,6 +2,7 @@ use std::sync::{Arc, Mutex};
 use tauri::{AppHandle, State};
 use uuid::Uuid;
 use std::process::Command;
+use std::fs;
 
 use crate::core::{
     error::AppError,
@@ -79,7 +80,7 @@ pub async fn start_download(
     restrict_filenames: Option<bool>,
     app_handle: AppHandle,
     manager: State<'_, Arc<Mutex<JobManager>>>,
-) -> Result<Vec<Uuid>, AppError> { // CHANGED: Now returns Vec<Uuid>
+) -> Result<Vec<Uuid>, AppError> { 
     
     if !url.starts_with("http://") && !url.starts_with("https://") {
         return Err(AppError::ValidationFailed("Invalid URL provided.".into()));
@@ -95,7 +96,6 @@ pub async fn start_download(
     };
 
     // 1. Probe the URL (Expand if playlist)
-    // This is blocking IO but inside an async command (running on thread pool), so it's acceptable.
     let entries = probe_url(&url)?;
 
     let mut created_job_ids = Vec::new();
@@ -107,7 +107,7 @@ pub async fn start_download(
         
         let job_data = QueuedJob {
             id: job_id,
-            url: entry.url, // Use the specific video URL found by probe
+            url: entry.url,
             download_path: download_path.clone(),
             format_preset: format_preset.clone(),
             video_resolution: video_resolution.clone(),
@@ -117,7 +117,6 @@ pub async fn start_download(
             restrict_filenames: restrict_filenames.unwrap_or(false),
         };
 
-        // This triggers process_queue internally if slots are available
         manager_lock.add_job(job_data, app_handle.clone())?;
         created_job_ids.push(job_id);
     }
@@ -172,4 +171,70 @@ pub fn cancel_download(
             Err(AppError::JobNotFound)
         }
     }
+}
+
+// --- PERSISTENCE COMMANDS ---
+
+fn get_jobs_file_path() -> std::path::PathBuf {
+    let home = dirs::home_dir().expect("Could not find home directory");
+    home.join(".multiyt-dlp").join("jobs.json")
+}
+
+#[tauri::command]
+pub fn get_pending_jobs() -> Result<u32, String> {
+    let path = get_jobs_file_path();
+    if !path.exists() {
+        return Ok(0);
+    }
+    
+    let content = fs::read_to_string(path).map_err(|e| e.to_string())?;
+    let jobs: Vec<QueuedJob> = serde_json::from_str(&content).unwrap_or_default();
+    
+    Ok(jobs.len() as u32)
+}
+
+#[tauri::command]
+pub async fn resume_pending_jobs(
+    app_handle: AppHandle,
+    manager: State<'_, Arc<Mutex<JobManager>>>
+) -> Result<Vec<Uuid>, String> {
+    let path = get_jobs_file_path();
+    if !path.exists() {
+        return Ok(vec![]);
+    }
+
+    let content = fs::read_to_string(&path).map_err(|e| e.to_string())?;
+    let jobs: Vec<QueuedJob> = serde_json::from_str(&content).map_err(|e| e.to_string())?;
+
+    let mut resumed_ids = Vec::new();
+    let mut manager_lock = manager.lock().unwrap();
+
+    for job in jobs {
+        // Reuse existing config.
+        // Important: add_job re-saves the state, so if we crash during resume loop, 
+        // the list is constantly updating.
+        if let Ok(_) = manager_lock.add_job(job.clone(), app_handle.clone()) {
+            resumed_ids.push(job.id);
+        }
+    }
+
+    // Delete old file only if we successfully re-queued everything
+    // Actually, add_job overwrites the file with current state, so explicit delete isn't strictly necessary 
+    // unless we want to be clean. But since add_job manages persistence, we are good.
+    
+    Ok(resumed_ids)
+}
+
+#[tauri::command]
+pub fn clear_pending_jobs(manager: State<'_, Arc<Mutex<JobManager>>>) -> Result<(), String> {
+    let path = get_jobs_file_path();
+    if path.exists() {
+        fs::remove_file(path).map_err(|e| e.to_string())?;
+    }
+    
+    // Also clean temp folder since we are abandoning these jobs
+    let mgr = manager.lock().unwrap();
+    mgr.clean_temp_directory();
+    
+    Ok(())
 }

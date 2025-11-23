@@ -55,7 +55,7 @@ export async function startDownload(
   embedThumbnail: boolean,
   filenameTemplate: string,
   restrictFilenames: boolean = false
-): Promise<string[]> { // CHANGED: Returns Array of strings (UUIDs)
+): Promise<string[]> {
   return await invoke("start_download", { 
     url, 
     downloadPath, 
@@ -70,6 +70,20 @@ export async function startDownload(
 
 export async function cancelDownload(jobId: string): Promise<void> {
   return await invoke("cancel_download", { jobId });
+}
+
+// --- Persistence API ---
+
+export async function getPendingJobs(): Promise<number> {
+    return await invoke("get_pending_jobs");
+}
+
+export async function resumePendingJobs(): Promise<string[]> {
+    return await invoke("resume_pending_jobs");
+}
+
+export async function clearPendingJobs(): Promise<void> {
+    return await invoke("clear_pending_jobs");
 }
 
 export async function selectDirectory(): Promise<string | null> {

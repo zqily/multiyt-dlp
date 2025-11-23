@@ -10,8 +10,19 @@ export function useDownloadManager() {
     setDownloads((prev) => {
       const newMap = new Map(prev);
       const existing = newMap.get(jobId);
+      
       if (existing) {
         newMap.set(jobId, { ...existing, ...newProps });
+      } else {
+        // If the job doesn't exist in React state but backend sends an event,
+        // create a placeholder so it appears in the UI.
+        newMap.set(jobId, {
+            jobId,
+            url: newProps.filename || 'Resumed Download', // We might not have the original URL in the event payload
+            status: newProps.status || 'downloading',
+            progress: newProps.progress || 0,
+            ...newProps
+        } as Download);
       }
       return newMap;
     });
@@ -63,7 +74,6 @@ export function useDownloadManager() {
     restrictFilenames: boolean = false
   ) => {
     try {
-      // API now returns an array of IDs (one for single video, multiple for playlist)
       const jobIds = await apiStartDownload(
           url, 
           downloadPath, 
@@ -81,10 +91,9 @@ export function useDownloadManager() {
         jobIds.forEach(jobId => {
             newMap.set(jobId, {
               jobId,
-              url, // Initial URL (might be playlist URL for all, which is fine)
+              url,
               status: 'pending',
               progress: 0,
-              // Save config for potential retry
               preset: formatPreset,
               videoResolution,
               downloadPath,
@@ -99,7 +108,7 @@ export function useDownloadManager() {
       });
     } catch (error) {
       console.error('Failed to start download:', error);
-      throw error; // Re-throw so UI can handle loading state or error alerts
+      throw error;
     }
   }, []);
 
@@ -113,7 +122,6 @@ export function useDownloadManager() {
     }
   }, []);
 
-  // Used to clear finished jobs or remove jobs before retrying
   const removeDownload = useCallback((jobId: string) => {
       setDownloads((prev) => {
           const newMap = new Map(prev);
