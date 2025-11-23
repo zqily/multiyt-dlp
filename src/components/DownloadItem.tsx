@@ -19,18 +19,16 @@ export function DownloadItem({ download, onCancel }: DownloadItemProps) {
 
   // Determine State Flags
   const isQueued = status === 'pending';
-  const isActive = status === 'downloading'; // Only true if process is actually running
+  const isActive = status === 'downloading'; 
   const isError = status === 'error';
   const isCompleted = status === 'completed';
   const isCancelled = status === 'cancelled';
 
-  // Formatting helpers
   const formatStat = (text?: string) => {
       if (!text || text === 'Unknown' || text === 'N/A') return <span className="animate-pulse text-zinc-600">--</span>;
       return text;
   };
 
-  // Determine if we are in a post-processing phase
   const isProcessingPhase = phase?.includes('Merging') 
     || phase?.includes('Extracting') 
     || phase?.includes('Fixing')
@@ -65,7 +63,7 @@ export function DownloadItem({ download, onCancel }: DownloadItemProps) {
 
   const handleOpenFolder = () => {
       if (outputPath) {
-          showInFolder(outputPath);
+          showInFolder(outputPath).catch(console.error);
       }
   };
 
@@ -81,7 +79,6 @@ export function DownloadItem({ download, onCancel }: DownloadItemProps) {
     )}>
       
       <div className="flex items-start gap-5">
-        {/* Icon Box */}
         <div className={twMerge(
             "h-12 w-12 flex-shrink-0 rounded-lg flex items-center justify-center border transition-colors duration-500",
             isActive && (isProcessingPhase || isMetaPhase) && "bg-yellow-500/10 border-yellow-500/30",
@@ -93,7 +90,6 @@ export function DownloadItem({ download, onCancel }: DownloadItemProps) {
         </div>
         
         <div className="flex-grow min-w-0 space-y-3">
-            {/* Title Row */}
             <div className="flex justify-between items-start gap-4">
                  <div className="space-y-1 min-w-0">
                     <p className={twMerge(
@@ -103,7 +99,6 @@ export function DownloadItem({ download, onCancel }: DownloadItemProps) {
                         {displayTitle}
                     </p>
                     <div className="flex items-center gap-2 text-[10px] uppercase tracking-wider font-bold">
-                        {/* Format Badge */}
                         <span className={twMerge(
                             "px-1.5 py-0.5 rounded border transition-colors",
                             isCancelled
@@ -127,23 +122,16 @@ export function DownloadItem({ download, onCancel }: DownloadItemProps) {
                              </span>
                         )}
 
-                        {/* Phase / Status Text */}
                         <span className={twMerge(
                             "flex items-center gap-1 transition-colors duration-300 ml-1",
                              isCancelled ? "text-zinc-700" : (isProcessingPhase || isMetaPhase) ? "text-yellow-400" : "text-zinc-500"
                         )}>
                             {isActive && <Activity className={twMerge("h-3 w-3", (isProcessingPhase || isMetaPhase) && "animate-spin")} />}
-                            
-                            {phase 
-                                ? phase 
-                                : isQueued 
-                                    ? "Waiting for slot..." 
-                                    : status}
+                            {phase || (isQueued ? "Waiting for slot..." : status)}
                         </span>
                     </div>
                  </div>
 
-                 {/* Percentage / Status */}
                  <div className="flex flex-col items-end gap-1">
                     {isActive && (
                          <span className="text-lg font-bold text-zinc-100 tabular-nums">
@@ -163,16 +151,13 @@ export function DownloadItem({ download, onCancel }: DownloadItemProps) {
                  </div>
             </div>
             
-            {/* Progress Bar Area */}
             <div className="space-y-3">
                 {isActive && (
                      <div className={twMerge("relative", (isProcessingPhase || isMetaPhase) && "opacity-80")}>
                         <Progress 
                             value={progress} 
                             variant={isError ? 'error' : 'default'} 
-                            className={twMerge(
-                                (isProcessingPhase || isMetaPhase) && "opacity-70"
-                            )}
+                            className={twMerge((isProcessingPhase || isMetaPhase) && "opacity-70")}
                         />
                         {(isProcessingPhase || isMetaPhase) && (
                             <div className="absolute inset-0 bg-yellow-400/20 animate-pulse rounded-full" />
@@ -205,7 +190,7 @@ export function DownloadItem({ download, onCancel }: DownloadItemProps) {
             </div>
         </div>
 
-        {/* Actions */}
+        {/* Actions Column */}
         <div className="flex flex-col justify-center pl-2 gap-2">
           {(isActive || isQueued) && (
              <Button 

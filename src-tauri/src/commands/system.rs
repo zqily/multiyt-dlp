@@ -204,21 +204,38 @@ pub fn close_splash(app_handle: AppHandle) {
     }
 }
 
-// NEW: App Update Check
 #[tauri::command]
 pub async fn get_latest_app_version() -> Result<String, String> {
     deps::get_latest_github_tag("zqily/multiyt-dlp").await
 }
 
-// NEW: Show file in folder logic
 #[tauri::command]
 pub fn show_in_folder(path: String) -> Result<(), String> {
+    println!("DEBUG: [show_in_folder] Processing path: '{}'", path);
+
+    let path_obj = std::path::Path::new(&path);
+    if !path_obj.exists() {
+        return Err(format!("File not found: {}", path));
+    }
+
     #[cfg(target_os = "windows")]
     {
-        Command::new("explorer")
-            .args(["/select,", &path]) // Comma is important
-            .spawn()
-            .map_err(|e| e.to_string())?;
+        use std::os::windows::process::CommandExt; // Required for raw_arg
+
+        let normalized_path = path.replace("/", "\\");
+        
+        let command = Command::new("explorer")
+            .arg("/select,")
+            .raw_arg(format!("\"{}\"", normalized_path))
+            .spawn();
+
+        match command {
+            Ok(_) => Ok(()),
+            Err(e) => {
+                println!("DEBUG: [show_in_folder] Failed to spawn explorer: {}", e);
+                Err(e.to_string())
+            }
+        }
     }
 
     #[cfg(target_os = "macos")]
@@ -227,20 +244,19 @@ pub fn show_in_folder(path: String) -> Result<(), String> {
             .args(["-R", &path])
             .spawn()
             .map_err(|e| e.to_string())?;
+        Ok(())
     }
 
     #[cfg(target_os = "linux")]
     {
-        let path_obj = std::path::PathBuf::from(&path);
         if let Some(parent) = path_obj.parent() {
              Command::new("xdg-open")
                 .arg(parent)
                 .spawn()
                 .map_err(|e| e.to_string())?;
+             Ok(())
         } else {
-            return Err("Could not determine parent directory".to_string());
+            Err("Could not determine parent directory".to_string())
         }
     }
-
-    Ok(())
 }
