@@ -7,6 +7,13 @@ use tokio::sync::mpsc;
 use std::time::Duration;
 use std::fs;
 
+// --- WINDOWS SPECIFIC IMPORTS ---
+#[cfg(target_os = "windows")]
+use windows::{
+    core::PCWSTR,
+    Win32::UI::Shell::SetCurrentProcessExplicitAppUserModelID,
+};
+
 use crate::core::manager::JobManagerHandle;
 use crate::config::ConfigManager;
 use crate::core::logging::LogManager;
@@ -17,6 +24,21 @@ mod models;
 mod config;
 
 fn main() {
+    // Explicitly set the App User Model ID (AUMID) for the process.
+    // This ensures Windows attributes notifications to "Multiyt-dlp" and uses the app icon.
+    #[cfg(target_os = "windows")]
+    unsafe {
+        // This string must match the "identifier" in tauri.conf.json
+        const APP_ID: &str = "net.zqil.multiyt-dlp";
+        
+        // Convert string to wide-string (UTF-16) required by Windows API
+        let wide_id: Vec<u16> = APP_ID.encode_utf16().chain(std::iter::once(0)).collect();
+        
+        // Ignore error if setting fails (non-critical, but fixes visual bug)
+        let _ = SetCurrentProcessExplicitAppUserModelID(PCWSTR(wide_id.as_ptr()));
+    }
+    // ---------------------------------------------------
+
     let home = dirs::home_dir().expect("Could not find home directory");
     let temp_dir = home.join(".multiyt-dlp").join("temp_downloads");
     if !temp_dir.exists() {
