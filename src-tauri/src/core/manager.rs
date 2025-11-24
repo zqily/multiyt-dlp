@@ -1,39 +1,99 @@
 use std::collections::{HashMap, VecDeque};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+use tokio::sync::{mpsc, oneshot};
+use tokio::time::{self, Duration};
 use tauri::{AppHandle, Manager};
 use uuid::Uuid;
 use std::fs;
 use std::path::PathBuf;
-use crate::{models::{Job, JobStatus, QueuedJob}, core::error::AppError, config::ConfigManager};
+
+use crate::models::{
+    Job, JobStatus, QueuedJob, JobMessage, 
+    DownloadProgressPayload, BatchProgressPayload, 
+    DownloadCompletePayload, DownloadErrorPayload
+};
+use crate::config::ConfigManager;
 use crate::core::process::run_download_process;
 use crate::core::native;
 
-pub struct JobManager {
-    // Runtime State
-    jobs: HashMap<Uuid, Job>,
-    queue: VecDeque<QueuedJob>,
-    
-    // Persistence Registry: Keeps track of the config for ALL active/queued jobs
-    // This is what gets saved to jobs.json
-    persistence_registry: HashMap<Uuid, QueuedJob>,
-
-    // Concurrency Counters
-    active_network_jobs: u32,
-    active_process_instances: u32,
-
-    // Session Stats
-    completed_session_count: u32,
+/// The "Handle" is what we pass around in the Tauri state.
+/// It sends messages to the running Actor loop.
+#[derive(Clone)]
+pub struct JobManagerHandle {
+    sender: mpsc::Sender<JobMessage>,
 }
 
-impl JobManager {
-    pub fn new() -> Self {
+impl JobManagerHandle {
+    pub fn new(app_handle: AppHandle) -> Self {
+        // Increased channel capacity from 100 to 1000 to prevent backpressure 
+        // during high-frequency log updates from multiple concurrent downloads.
+        let (sender, receiver) = mpsc::channel(1000);
+        let actor = JobManagerActor::new(app_handle, receiver, sender.clone());
+        // FIX: Use tauri::async_runtime::spawn instead of tokio::spawn to ensure runtime context
+        tauri::async_runtime::spawn(actor.run());
+        
+        Self { sender }
+    }
+
+    pub async fn add_job(&self, job: QueuedJob) -> Result<(), String> {
+        let (tx, rx) = oneshot::channel();
+        let _ = self.sender.send(JobMessage::AddJob { job, resp: tx }).await;
+        rx.await.map_err(|_| "Actor closed".to_string())?
+    }
+
+    pub async fn cancel_job(&self, id: Uuid) {
+        let _ = self.sender.send(JobMessage::CancelJob { id }).await;
+    }
+
+    pub async fn get_pending_count(&self) -> u32 {
+        let (tx, rx) = oneshot::channel();
+        let _ = self.sender.send(JobMessage::GetPendingCount(tx)).await;
+        rx.await.unwrap_or(0)
+    }
+
+    pub async fn resume_pending(&self) -> Vec<QueuedJob> {
+        let (tx, rx) = oneshot::channel();
+        let _ = self.sender.send(JobMessage::ResumePending(tx)).await;
+        rx.await.unwrap_or_default()
+    }
+
+    pub async fn clear_pending(&self) {
+        let _ = self.sender.send(JobMessage::ClearPending).await;
+    }
+}
+
+struct JobManagerActor {
+    app_handle: AppHandle,
+    receiver: mpsc::Receiver<JobMessage>,
+    self_sender: mpsc::Sender<JobMessage>, // To pass to workers
+
+    // State
+    jobs: HashMap<Uuid, Job>,
+    queue: VecDeque<QueuedJob>,
+    persistence_registry: HashMap<Uuid, QueuedJob>,
+
+    // Concurrency
+    active_network_jobs: u32,
+    active_process_instances: u32,
+    completed_session_count: u32,
+
+    // Batching Buffer
+    pending_updates: HashMap<Uuid, DownloadProgressPayload>,
+}
+
+impl JobManagerActor {
+    fn new(app_handle: AppHandle, receiver: mpsc::Receiver<JobMessage>, self_sender: mpsc::Sender<JobMessage>) -> Self {
         Self {
+            app_handle,
+            receiver,
+            self_sender,
             jobs: HashMap::new(),
             queue: VecDeque::new(),
             persistence_registry: HashMap::new(),
             active_network_jobs: 0,
             active_process_instances: 0,
             completed_session_count: 0,
+            pending_updates: HashMap::new(),
         }
     }
 
@@ -44,181 +104,222 @@ impl JobManager {
 
     fn save_state(&self) {
         let path = Self::get_persistence_path();
-        // Convert registry values to a vector for saving
-        let jobs: Vec<&QueuedJob> = self.persistence_registry.values().collect();
+        // Clone the data needed for saving so we can move it into the async block.
+        // This prevents blocking the main actor loop with file I/O.
+        let jobs: Vec<QueuedJob> = self.persistence_registry.values().cloned().collect();
         
-        if let Ok(json) = serde_json::to_string_pretty(&jobs) {
-             let _ = fs::write(path, json);
+        tauri::async_runtime::spawn(async move {
+            if let Ok(json) = serde_json::to_string_pretty(&jobs) {
+                 let _ = tokio::fs::write(path, json).await;
+            }
+        });
+    }
+
+    async fn run(mut self) {
+        // Tick for UI updates (200ms) to prevent frontend flooding
+        let mut interval = time::interval(Duration::from_millis(200));
+
+        loop {
+            tokio::select! {
+                // 1. Handle Messages
+                Some(msg) = self.receiver.recv() => {
+                    self.handle_message(msg).await;
+                }
+
+                // 2. Batch Emit Tick
+                _ = interval.tick() => {
+                    self.flush_updates();
+                    self.update_native_ui();
+                }
+            }
         }
     }
 
-    // Adds a job to the registry and queues it
-    pub fn add_job(&mut self, job_data: QueuedJob, app_handle: AppHandle) -> Result<(), AppError> {
-        if self.jobs.values().any(|j| j.url == job_data.url) {
-            return Err(AppError::JobAlreadyExists);
+    async fn handle_message(&mut self, msg: JobMessage) {
+        match msg {
+            JobMessage::AddJob { job, resp } => {
+                if self.jobs.contains_key(&job.id) {
+                    let _ = resp.send(Err("Job already exists".into()));
+                } else {
+                    let j = Job::new(job.id, job.url.clone());
+                    self.jobs.insert(job.id, j);
+                    self.persistence_registry.insert(job.id, job.clone());
+                    self.queue.push_back(job);
+                    self.save_state();
+                    self.process_queue();
+                    let _ = resp.send(Ok(()));
+                }
+            },
+            JobMessage::CancelJob { id } => {
+                // Kill Process
+                if let Some(job) = self.jobs.get(&id) {
+                    if let Some(pid) = job.pid {
+                        self.kill_process(pid);
+                    }
+                }
+                
+                // Update Status
+                if let Some(job) = self.jobs.get_mut(&id) {
+                    job.status = JobStatus::Cancelled;
+                }
+
+                // Clean Persistence
+                self.persistence_registry.remove(&id);
+                self.save_state();
+
+                // Notify Front End immediately (cancellation is urgent)
+                let _ = self.app_handle.emit_all("download-error", DownloadErrorPayload {
+                    job_id: id,
+                    error: "Cancelled by user".to_string()
+                });
+            },
+            JobMessage::ProcessStarted { id, pid } => {
+                if let Some(job) = self.jobs.get_mut(&id) {
+                    // Double check cancellation race condition
+                    if job.status == JobStatus::Cancelled {
+                        self.kill_process(pid);
+                    } else {
+                        job.pid = Some(pid);
+                        job.status = JobStatus::Downloading;
+                    }
+                }
+            },
+            JobMessage::UpdateProgress { id, percentage, speed, eta, filename, phase } => {
+                if let Some(job) = self.jobs.get_mut(&id) {
+                    job.progress = percentage;
+                    // We don't emit here. We push to buffer.
+                    self.pending_updates.insert(id, DownloadProgressPayload {
+                        job_id: id,
+                        percentage,
+                        speed,
+                        eta,
+                        filename,
+                        phase: Some(phase)
+                    });
+                }
+            },
+            JobMessage::JobCompleted { id, output_path } => {
+                if let Some(job) = self.jobs.get_mut(&id) {
+                    job.status = JobStatus::Completed;
+                    job.progress = 100.0;
+                }
+                self.persistence_registry.remove(&id);
+                self.save_state();
+
+                let _ = self.app_handle.emit_all("download-complete", DownloadCompletePayload {
+                    job_id: id,
+                    output_path,
+                });
+            },
+            JobMessage::JobError { id, error } => {
+                if let Some(job) = self.jobs.get_mut(&id) {
+                    job.status = JobStatus::Error;
+                }
+                // Persistence kept for retry
+                let _ = self.app_handle.emit_all("download-error", DownloadErrorPayload {
+                    job_id: id,
+                    error,
+                });
+            },
+            JobMessage::WorkerFinished => {
+                if self.active_process_instances > 0 {
+                    self.active_process_instances -= 1;
+                    self.completed_session_count += 1;
+                }
+                
+                // Release network slot conservatively (though process logic usually manages this via phase)
+                // If a worker finishes, it definitely releases network if it was holding it
+                if self.active_network_jobs > 0 {
+                    self.active_network_jobs -= 1;
+                }
+
+                if self.active_process_instances == 0 {
+                    self.trigger_finished_notification();
+                    self.clean_temp_directory();
+                }
+                self.process_queue();
+            },
+            JobMessage::GetPendingCount(tx) => {
+                let path = Self::get_persistence_path();
+                if path.exists() {
+                     if let Ok(content) = fs::read_to_string(path) {
+                         if let Ok(jobs) = serde_json::from_str::<Vec<QueuedJob>>(&content) {
+                             let _ = tx.send(jobs.len() as u32);
+                             return;
+                         }
+                     }
+                }
+                let _ = tx.send(0);
+            },
+            JobMessage::ResumePending(tx) => {
+                let path = Self::get_persistence_path();
+                let mut resumed = Vec::new();
+                if path.exists() {
+                    if let Ok(content) = fs::read_to_string(path) {
+                        if let Ok(jobs) = serde_json::from_str::<Vec<QueuedJob>>(&content) {
+                            for job in jobs {
+                                // Re-inject into state
+                                if !self.jobs.contains_key(&job.id) {
+                                    self.jobs.insert(job.id, Job::new(job.id, job.url.clone()));
+                                    self.persistence_registry.insert(job.id, job.clone());
+                                    // Important: Queue it!
+                                    self.queue.push_back(job.clone());
+                                    resumed.push(job);
+                                }
+                            }
+                        }
+                    }
+                }
+                self.process_queue(); // Kickstart
+                let _ = tx.send(resumed);
+            },
+            JobMessage::ClearPending => {
+                let path = Self::get_persistence_path();
+                if path.exists() { let _ = fs::remove_file(path); }
+                self.clean_temp_directory();
+            }
         }
-
-        let job = Job::new(job_data.url.clone());
-        self.jobs.insert(job_data.id, job);
-        
-        // Add to persistence registry and Save
-        self.persistence_registry.insert(job_data.id, job_data.clone());
-        self.save_state();
-
-        self.queue.push_back(job_data);
-
-        // Update UI (Taskbar should show something if new items added)
-        self.update_native_ui(&app_handle);
-
-        // Attempt to start jobs immediately if slots are open
-        self.process_queue(app_handle);
-        
-        Ok(())
     }
 
-    // Called whenever a slot might open up (add_job, network_finished, process_finished)
-    pub fn process_queue(&mut self, app_handle: AppHandle) {
-        // Retrieve limits from config
-        let config_manager = app_handle.state::<Arc<ConfigManager>>();
+    fn flush_updates(&mut self) {
+        if self.pending_updates.is_empty() { return; }
+
+        let updates: Vec<DownloadProgressPayload> = self.pending_updates.values().cloned().collect();
+        self.pending_updates.clear();
+
+        // Emit Single Batch Event
+        let _ = self.app_handle.emit_all("download-progress-batch", BatchProgressPayload { updates });
+    }
+
+    fn process_queue(&mut self) {
+        let config_manager = self.app_handle.state::<Arc<ConfigManager>>();
         let config = config_manager.get_config().general;
 
         while self.active_network_jobs < config.max_concurrent_downloads 
            && self.active_process_instances < config.max_total_instances 
         {
             if let Some(next_job) = self.queue.pop_front() {
-                // Double check status hasn't been cancelled while in queue
-                if let Some(job) = self.jobs.get(&next_job.id) {
-                     if job.status == JobStatus::Cancelled {
-                         continue;
-                     }
-                }
+                 if let Some(job) = self.jobs.get(&next_job.id) {
+                     if job.status == JobStatus::Cancelled { continue; }
+                 }
 
-                self.active_network_jobs += 1;
-                self.active_process_instances += 1;
-
-                // Spawn the job
-                let manager_state = app_handle.state::<Arc<Mutex<JobManager>>>().inner().clone();
-                let job_id = next_job.id;
-                
-                let app_handle_clone = app_handle.clone();
-                
-                tokio::spawn(async move {
-                    run_download_process(
-                        next_job, 
-                        app_handle_clone, 
-                        manager_state
-                    ).await;
-                });
-                
-                println!("Started Job {}. Active Network: {}, Total Instances: {}", job_id, self.active_network_jobs, self.active_process_instances);
-
+                 self.active_network_jobs += 1;
+                 self.active_process_instances += 1;
+                 
+                 let tx = self.self_sender.clone();
+                 let app = self.app_handle.clone();
+                 
+                 // FIX: Use tauri::async_runtime::spawn
+                 tauri::async_runtime::spawn(async move {
+                    run_download_process(next_job, app, tx).await;
+                 });
             } else {
-                break; // Queue empty
+                break;
             }
         }
     }
 
-    // --- State Callbacks from Process ---
-
-    pub fn notify_network_finished(&mut self, app_handle: AppHandle) {
-        if self.active_network_jobs > 0 {
-            self.active_network_jobs -= 1;
-            println!("Network slot released. Active Network: {}", self.active_network_jobs);
-            self.process_queue(app_handle);
-        }
-    }
-
-    pub fn notify_process_finished(&mut self, app_handle: AppHandle) {
-        if self.active_process_instances > 0 {
-            self.active_process_instances -= 1;
-            self.completed_session_count += 1;
-
-            println!("Instance slot released. Total Instances: {}", self.active_process_instances);
-            
-            // Native UI Update: If we hit 0 instances, queue is done.
-            if self.active_process_instances == 0 {
-                self.trigger_finished_notification(&app_handle);
-            }
-
-            self.process_queue(app_handle.clone());
-            self.update_native_ui(&app_handle);
-
-            // Auto-cleanup Temp Directory if completely idle AND queue is empty
-            if self.active_process_instances == 0 && self.queue.is_empty() {
-                // Only clean if persistence is empty too (fully done or cleared)
-                if self.persistence_registry.is_empty() {
-                     self.clean_temp_directory();
-                }
-            }
-        }
-    }
-
-    pub fn clean_temp_directory(&self) {
-        let home = dirs::home_dir().unwrap_or_else(|| std::path::PathBuf::from("."));
-        let temp_dir = home.join(".multiyt-dlp").join("temp_downloads");
-        
-        if temp_dir.exists() {
-            println!("Cleaning temp directory: {:?}", temp_dir);
-            if let Ok(entries) = fs::read_dir(&temp_dir) {
-                for entry in entries {
-                    if let Ok(entry) = entry {
-                        let path = entry.path();
-                        if path.is_dir() {
-                            let _ = fs::remove_dir_all(path);
-                        } else {
-                            let _ = fs::remove_file(path);
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    // --- Standard Getters/Setters ---
-
-    pub fn get_job_pid(&self, id: Uuid) -> Option<u32> {
-        self.jobs.get(&id).and_then(|job| job.pid)
-    }
-
-    pub fn get_job_status(&self, id: Uuid) -> Option<JobStatus> {
-        self.jobs.get(&id).map(|job| job.status.clone())
-    }
-
-    pub fn update_job_pid(&mut self, id: Uuid, pid: u32) -> Result<(), AppError> {
-        if let Some(job) = self.jobs.get_mut(&id) {
-            job.pid = Some(pid);
-            Ok(())
-        } else {
-            Err(AppError::JobNotFound)
-        }
-    }
-    
-    pub fn update_job_status(&mut self, id: Uuid, status: JobStatus) -> Result<(), AppError> {
-        if let Some(job) = self.jobs.get_mut(&id) {
-            job.status = status;
-            Ok(())
-        } else {
-            Err(AppError::JobNotFound)
-        }
-    }
-
-    pub fn remove_job(&mut self, id: Uuid) {
-        self.jobs.remove(&id);
-        // Also remove from persistence and save
-        self.persistence_registry.remove(&id);
-        self.save_state();
-    }
-
-    // --- Native UI Logic ---
-
-    pub fn update_job_progress(&mut self, id: Uuid, progress: f32, app_handle: &AppHandle) {
-        if let Some(job) = self.jobs.get_mut(&id) {
-            job.progress = progress;
-        }
-        self.update_native_ui(app_handle);
-    }
-
-    fn update_native_ui(&self, app_handle: &AppHandle) {
+    fn update_native_ui(&self) {
         let active_jobs: Vec<&Job> = self.jobs.values()
             .filter(|j| j.status == JobStatus::Downloading || j.status == JobStatus::Pending)
             .collect();
@@ -226,40 +327,66 @@ impl JobManager {
         let active_count = active_jobs.len();
 
         if active_count == 0 {
-            native::clear_taskbar_progress(app_handle);
+            native::clear_taskbar_progress(&self.app_handle);
             return;
         }
 
         let total_progress: f32 = active_jobs.iter().map(|j| j.progress).sum();
         let aggregated = total_progress / (active_count as f32);
-        
-        // Check for any errors in the current batch to tint the bar red
         let has_error = self.jobs.values().any(|j| j.status == JobStatus::Error);
 
-        // Run on main thread to be safe with OS calls
-        let app_for_thread = app_handle.clone(); // FIX: Clone dedicated handle for closure
+        let app_handle_for_closure = self.app_handle.clone();
         
-        let _ = app_handle.run_on_main_thread(move || {
-            native::set_taskbar_progress(&app_for_thread, (aggregated / 100.0) as f64, has_error);
+        let _ = self.app_handle.run_on_main_thread(move || {
+            native::set_taskbar_progress(&app_handle_for_closure, (aggregated / 100.0) as f64, has_error);
         });
     }
 
-    fn trigger_finished_notification(&mut self, app_handle: &AppHandle) {
+    fn kill_process(&self, pid: u32) {
+        #[cfg(not(windows))]
+        {
+            use nix::sys::signal::{self, Signal};
+            use nix::unistd::Pid;
+            let _ = signal::kill(Pid::from_raw(pid as i32), Signal::SIGINT);
+        }
+
+        #[cfg(windows)]
+        {
+            let mut cmd = std::process::Command::new("taskkill");
+            cmd.args(&["/F", "/T", "/PID", &pid.to_string()]);
+            use std::os::windows::process::CommandExt;
+            cmd.creation_flags(0x08000000); 
+            let _ = cmd.spawn();
+        }
+    }
+
+    fn trigger_finished_notification(&mut self) {
         use tauri::api::notification::Notification;
-
         let count = self.completed_session_count;
-        if count == 0 { return; } // Don't notify if nothing happened
+        if count == 0 { return; }
 
-        let title = "Downloads Finished";
-        let body = format!("Queue processed. {} files handled.", count);
-        
-        let _ = Notification::new(app_handle.config().tauri.bundle.identifier.clone())
-            .title(title)
-            .body(body)
+        let _ = Notification::new(self.app_handle.config().tauri.bundle.identifier.clone())
+            .title("Downloads Finished")
+            .body(format!("Queue processed. {} files handled.", count))
             .icon("icons/128x128.png") 
             .show();
 
-        // Reset session count
         self.completed_session_count = 0;
+    }
+
+    fn clean_temp_directory(&self) {
+        if !self.queue.is_empty() || !self.persistence_registry.is_empty() { return; }
+
+        let home = dirs::home_dir().unwrap_or_else(|| std::path::PathBuf::from("."));
+        let temp_dir = home.join(".multiyt-dlp").join("temp_downloads");
+        
+        if temp_dir.exists() {
+            if let Ok(entries) = fs::read_dir(&temp_dir) {
+                for entry in entries.flatten() {
+                    if entry.path().is_dir() { let _ = fs::remove_dir_all(entry.path()); }
+                    else { let _ = fs::remove_file(entry.path()); }
+                }
+            }
+        }
     }
 }

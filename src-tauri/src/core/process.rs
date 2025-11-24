@@ -1,5 +1,5 @@
 use std::process::Stdio;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use once_cell::sync::Lazy;
 use regex::Regex;
 use tauri::{AppHandle, Manager};
@@ -10,13 +10,11 @@ use std::path::{Path, PathBuf};
 use std::fs;
 use serde::Deserialize;
 
-use crate::core::manager::JobManager;
 use crate::config::ConfigManager;
-use crate::models::{DownloadCompletePayload, DownloadErrorPayload, DownloadProgressPayload, DownloadFormatPreset, QueuedJob, JobStatus};
+use crate::models::{DownloadFormatPreset, QueuedJob, JobMessage};
 use crate::commands::system::get_js_runtime_info;
 
 // --- Regex Definitions ---
-// Note: Progress scraping regex has been removed in favor of JSON parsing
 static DESTINATION_REGEX: Lazy<Regex> = Lazy::new(|| Regex::new(r"^\[download\]\s+Destination:\s+(?P<filename>.+)$").unwrap());
 static ALREADY_DOWNLOADED_REGEX: Lazy<Regex> = Lazy::new(|| Regex::new(r"\[download\]\s+(?:Destination:\s+)?(?P<filename>.+?)\s+has already been downloaded").unwrap());
 static MERGER_REGEX: Lazy<Regex> = Lazy::new(|| Regex::new(r#"\[Merger\]\s+Merging formats into\s+"?(?P<filename>.+?)"?$"#).unwrap());
@@ -27,8 +25,6 @@ static FIXUP_REGEX: Lazy<Regex> = Lazy::new(|| Regex::new(r"^\[(?:Fixup\w+)\]").
 static TITLE_CLEANER_REGEX: Lazy<Regex> = Lazy::new(|| Regex::new(r"\s\[[a-zA-Z0-9_-]{11}\]\.(?:f[0-9]+\.)?[a-z0-9]+$").unwrap());
 static FILESYSTEM_ERROR_REGEX: Lazy<Regex> = Lazy::new(|| Regex::new(r"(?i)(No such file|Invalid argument|cannot be written|WinError 123|Postprocessing: Error opening input files)").unwrap());
 
-// --- JSON Structs for yt-dlp Output ---
-
 #[derive(Deserialize, Debug)]
 struct YtDlpJsonProgress {
     downloaded_bytes: Option<u64>,
@@ -37,8 +33,6 @@ struct YtDlpJsonProgress {
     speed: Option<f64>, // bytes per second
     eta: Option<u64>,   // seconds
     filename: Option<String>,
-    // Optional: We can use this if we want exact text, but we calculate it ourselves for consistency
-    // _percent_str: Option<String>, 
 }
 
 // --- Helpers ---
@@ -51,44 +45,23 @@ fn robust_move_file(src: &Path, dest: &Path) -> Result<(), std::io::Error> {
     Ok(())
 }
 
-fn emit_error(job_id: uuid::Uuid, error: String, app_handle: &AppHandle, manager: &Arc<Mutex<JobManager>>) {
-    let mut lock = manager.lock().unwrap();
-    lock.update_job_status(job_id, JobStatus::Error).ok();
-    lock.notify_process_finished(app_handle.clone());
-    
-    let _ = app_handle.emit_all("download-error", DownloadErrorPayload {
-        job_id,
-        error,
-    });
-}
-
 fn format_speed(bytes_per_sec: f64) -> String {
     if bytes_per_sec.is_nan() || bytes_per_sec.is_infinite() { return "N/A".to_string(); }
-    
     const KIB: f64 = 1024.0;
     const MIB: f64 = KIB * 1024.0;
     const GIB: f64 = MIB * 1024.0;
-
-    if bytes_per_sec >= GIB {
-        format!("{:.2} GiB/s", bytes_per_sec / GIB)
-    } else if bytes_per_sec >= MIB {
-        format!("{:.2} MiB/s", bytes_per_sec / MIB)
-    } else if bytes_per_sec >= KIB {
-        format!("{:.2} KiB/s", bytes_per_sec / KIB)
-    } else {
-        format!("{:.0} B/s", bytes_per_sec)
-    }
+    if bytes_per_sec >= GIB { format!("{:.2} GiB/s", bytes_per_sec / GIB) }
+    else if bytes_per_sec >= MIB { format!("{:.2} MiB/s", bytes_per_sec / MIB) }
+    else if bytes_per_sec >= KIB { format!("{:.2} KiB/s", bytes_per_sec / KIB) }
+    else { format!("{:.0} B/s", bytes_per_sec) }
 }
 
 fn format_eta(seconds: u64) -> String {
     let h = seconds / 3600;
     let m = (seconds % 3600) / 60;
     let s = seconds % 60;
-    if h > 0 {
-        format!("{:02}:{:02}:{:02}", h, m, s)
-    } else {
-        format!("{:02}:{:02}", m, s)
-    }
+    if h > 0 { format!("{:02}:{:02}:{:02}", h, m, s) }
+    else { format!("{:02}:{:02}", m, s) }
 }
 
 // --- Main Process Logic ---
@@ -96,20 +69,20 @@ fn format_eta(seconds: u64) -> String {
 pub async fn run_download_process(
     mut job_data: QueuedJob,
     app_handle: AppHandle,
-    manager: Arc<Mutex<JobManager>>,
+    tx_actor: mpsc::Sender<JobMessage>,
 ) {
     let job_id = job_data.id;
     let url = job_data.url.clone();
 
-    // Initial event
-    let _ = app_handle.emit_all("download-progress", DownloadProgressPayload {
-        job_id,
+    // Notify Start
+    let _ = tx_actor.send(JobMessage::UpdateProgress {
+        id: job_id,
         percentage: 0.0,
         speed: "Starting...".to_string(),
         eta: "Calculating...".to_string(),
         filename: None,
-        phase: Some("Initializing Process...".to_string()),
-    });
+        phase: "Initializing Process...".to_string(),
+    }).await;
 
     let config_manager = app_handle.state::<Arc<ConfigManager>>();
 
@@ -120,45 +93,30 @@ pub async fn run_download_process(
         let app_dir = app_handle.path_resolver().app_data_dir().unwrap();
         let bin_dir = app_dir.join("bin");
         
-        // Resolve Paths
         let target_dir = if let Some(ref path) = job_data.download_path {
             PathBuf::from(path)
         } else {
             match tauri::api::path::download_dir() {
                 Some(path) => path,
                 None => {
-                    emit_error(job_id, "Could not determine downloads directory.".into(), &app_handle, &manager);
+                    let _ = tx_actor.send(JobMessage::JobError { id: job_id, error: "Missing download dir".into() }).await;
+                    let _ = tx_actor.send(JobMessage::WorkerFinished).await;
                     return;
                 }
             }
         };
         
-        if !target_dir.exists() {
-            if let Err(e) = std::fs::create_dir_all(&target_dir) {
-                emit_error(job_id, format!("Failed to create target directory: {}", e), &app_handle, &manager);
-                return;
-            }
-        }
-
+        if !target_dir.exists() { let _ = std::fs::create_dir_all(&target_dir); }
         let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
         let temp_dir = home.join(".multiyt-dlp").join("temp_downloads");
-        if !temp_dir.exists() {
-            if let Err(e) = std::fs::create_dir_all(&temp_dir) {
-                emit_error(job_id, format!("Failed to create temp directory: {}", e), &app_handle, &manager);
-                return;
-            }
-        }
+        if !temp_dir.exists() { let _ = std::fs::create_dir_all(&temp_dir); }
 
-        // Resolve Binary
         let mut yt_dlp_cmd = "yt-dlp".to_string();
         let local_exe = bin_dir.join(if cfg!(windows) { "yt-dlp.exe" } else { "yt-dlp" });
-        if local_exe.exists() {
-            yt_dlp_cmd = local_exe.to_string_lossy().to_string();
-        }
+        if local_exe.exists() { yt_dlp_cmd = local_exe.to_string_lossy().to_string(); }
 
         let mut cmd = Command::new(yt_dlp_cmd);
         
-        // Environment
         if let Ok(current_path) = std::env::var("PATH") {
             let new_path = format!("{}{}{}", bin_dir.to_string_lossy(), if cfg!(windows) { ";" } else { ":" }, current_path);
             cmd.env("PATH", new_path);
@@ -170,57 +128,38 @@ pub async fn run_download_process(
         cmd.env("PYTHONIOENCODING", "utf-8");
         cmd.current_dir(&temp_dir);
 
-        // JS Runtime
         if let Some((name, path)) = get_js_runtime_info(&bin_dir) {
-            cmd.arg("--js-runtimes");
-            cmd.arg(format!("{}:{}", name, path));
+            cmd.arg("--js-runtimes").arg(format!("{}:{}", name, path));
         }
 
-        // Cookies
         if let Some(cookie_path) = &general_config.cookies_path {
-            if !cookie_path.trim().is_empty() {
-                cmd.arg("--cookies").arg(cookie_path);
-            }
+            if !cookie_path.trim().is_empty() { cmd.arg("--cookies").arg(cookie_path); }
         } else if let Some(browser) = &general_config.cookies_from_browser {
-            if !browser.trim().is_empty() && browser != "none" {
-                cmd.arg("--cookies-from-browser").arg(browser);
-            }
+            if !browser.trim().is_empty() && browser != "none" { cmd.arg("--cookies-from-browser").arg(browser); }
         }
 
-        // --- Core Arguments ---
         cmd.arg(&url)
-            .arg("-o")
-            .arg(&job_data.filename_template) 
+            .arg("-o").arg(&job_data.filename_template) 
             .arg("--no-playlist")
             .arg("--no-simulate") 
             .arg("--newline")
             .arg("--windows-filenames")
-            .arg("--encoding")
-            .arg("utf-8");
+            .arg("--encoding").arg("utf-8")
+            .arg("--progress-template").arg("download:%(progress)j");
 
-        // --- Progress Template (JSON) ---
-        // This instructs yt-dlp to output a JSON object on a new line for every progress update.
-        // Format: download:{ ...json... }
-        cmd.arg("--progress-template").arg("download:%(progress)j");
-
-        // Stdio
         cmd.stdout(Stdio::piped());
         cmd.stderr(Stdio::piped());
 
         #[cfg(target_os = "windows")]
-        {
-            cmd.creation_flags(0x08000000);
-        }
+        { cmd.creation_flags(0x08000000); }
 
         if job_data.restrict_filenames {
-            cmd.arg("--restrict-filenames");
-            cmd.arg("--trim-filenames").arg("200");
+            cmd.arg("--restrict-filenames").arg("--trim-filenames").arg("200");
         }
 
         if job_data.embed_metadata { cmd.arg("--embed-metadata"); }
         if job_data.embed_thumbnail { cmd.arg("--embed-thumbnail"); }
 
-        // Formats
         let height_filter = if job_data.video_resolution != "best" {
             let number_part: String = job_data.video_resolution.chars().filter(|c| c.is_numeric()).collect();
             if !number_part.is_empty() { format!("[height<={}]", number_part) } else { String::new() }
@@ -228,9 +167,7 @@ pub async fn run_download_process(
 
         match job_data.format_preset {
             DownloadFormatPreset::Best => {
-                if !height_filter.is_empty() {
-                    cmd.arg("-f").arg(format!("bestvideo{}+bestaudio/best{}", height_filter, height_filter));
-                }
+                if !height_filter.is_empty() { cmd.arg("-f").arg(format!("bestvideo{}+bestaudio/best{}", height_filter, height_filter)); }
             }
             DownloadFormatPreset::BestMp4 => {
                 cmd.arg("-f").arg(format!("bestvideo{}+bestaudio", height_filter));
@@ -250,72 +187,43 @@ pub async fn run_download_process(
             DownloadFormatPreset::AudioM4a => { cmd.arg("-x").args(["--audio-format", "m4a", "--audio-quality", "0"]); }
         }
 
-        // Spawn
         let mut child = match cmd.spawn() {
             Ok(child) => child,
             Err(e) => {
-                emit_error(job_id, format!("Failed to spawn yt-dlp: {}", e), &app_handle, &manager);
+                let _ = tx_actor.send(JobMessage::JobError { id: job_id, error: e.to_string() }).await;
+                let _ = tx_actor.send(JobMessage::WorkerFinished).await;
                 return;
             }
         };
 
-        let pid = child.id().expect("Failed to get child process ID");
-        
-        let should_continue = {
-            let mut manager_lock = manager.lock().unwrap();
-            if let Some(status) = manager_lock.get_job_status(job_id) {
-                if status == JobStatus::Cancelled {
-                    false
-                } else {
-                    let _ = manager_lock.update_job_pid(job_id, pid);
-                    let _ = manager_lock.update_job_status(job_id, JobStatus::Downloading);
-                    true
-                }
-            } else {
-                false
-            }
-        };
-
-        if !should_continue {
-            let _ = child.kill().await;
-            let mut manager_lock = manager.lock().unwrap();
-            manager_lock.notify_process_finished(app_handle.clone());
-            return;
+        if let Some(pid) = child.id() {
+             let _ = tx_actor.send(JobMessage::ProcessStarted { id: job_id, pid }).await;
         }
 
-        // Retry notification
         if job_data.restrict_filenames {
-            let _ = app_handle.emit_all("download-progress", DownloadProgressPayload {
-                job_id,
-                percentage: 0.0,
-                speed: "Retrying...".to_string(),
-                eta: "--".to_string(),
-                filename: None,
-                phase: Some("Sanitizing Filenames (Retry)".to_string()),
-            });
+            let _ = tx_actor.send(JobMessage::UpdateProgress {
+                id: job_id, percentage: 0.0, speed: "Retrying...".to_string(), eta: "--".to_string(), filename: None,
+                phase: "Sanitizing Filenames (Retry)".to_string(),
+            }).await;
         }
 
-        // Log Streaming
         let stdout = child.stdout.take().expect("Failed to capture stdout");
         let stderr = child.stderr.take().expect("Failed to capture stderr");
         let (tx, mut rx) = mpsc::channel::<String>(100);
 
         let tx_out = tx.clone();
-        tokio::spawn(async move {
+        // FIX: Use tauri::async_runtime::spawn
+        tauri::async_runtime::spawn(async move {
             let mut reader = BufReader::new(stdout).lines();
-            while let Ok(Some(line)) = reader.next_line().await {
-                if tx_out.send(line).await.is_err() { break; }
-            }
+            while let Ok(Some(line)) = reader.next_line().await { if tx_out.send(line).await.is_err() { break; } }
         });
 
         let tx_err = tx.clone();
-        tokio::spawn(async move {
+        // FIX: Use tauri::async_runtime::spawn
+        tauri::async_runtime::spawn(async move {
             let mut reader = BufReader::new(stderr).lines();
-            while let Ok(Some(line)) = reader.next_line().await {
-                if tx_err.send(line).await.is_err() { break; }
-            }
+            while let Ok(Some(line)) = reader.next_line().await { if tx_err.send(line).await.is_err() { break; } }
         });
-
         drop(tx);
 
         let mut state_clean_title: Option<String> = None;
@@ -324,21 +232,9 @@ pub async fn run_download_process(
         let mut state_phase: String = "Initializing".to_string();
         let mut captured_logs = Vec::new();
         
-        let mut network_slot_released = false;
-
-        let release_network_slot = |mgr: &Arc<Mutex<JobManager>>, app: &AppHandle, released: &mut bool| {
-            if !*released {
-                *released = true;
-                let mut lock = mgr.lock().unwrap();
-                lock.notify_network_finished(app.clone());
-            }
-        };
-
         let extract_filename_from_path = |path_str: &str| -> Option<String> {
-            Path::new(path_str).file_name()
-                .map(|os| os.to_string_lossy().to_string())
+            Path::new(path_str).file_name().map(|os| os.to_string_lossy().to_string())
         };
-
         let extract_clean_title = |path_str: &str| -> Option<String> {
              if let Some(fname) = extract_filename_from_path(path_str) {
                 let cleaned = TITLE_CLEANER_REGEX.replace(&fname, "");
@@ -350,7 +246,6 @@ pub async fn run_download_process(
         while let Some(line) = rx.recv().await {
             let trimmed = line.trim();
             if trimmed.is_empty() { continue; }
-            
             captured_logs.push(trimmed.to_string());
             if captured_logs.len() > 100 { captured_logs.remove(0); }
 
@@ -358,72 +253,37 @@ pub async fn run_download_process(
             let mut speed_str = "N/A".to_string();
             let mut eta_str = "N/A".to_string();
 
-            // 1. Attempt JSON Parsing (Progress Updates)
-            // yt-dlp may output the JSON object directly if configured via --progress-template
             if let Ok(progress_json) = serde_json::from_str::<YtDlpJsonProgress>(trimmed) {
-                // Successful JSON Parse!
-                
-                // Calculate Percentage
                 if let Some(d) = progress_json.downloaded_bytes {
                      let t = progress_json.total_bytes.or(progress_json.total_bytes_estimate);
-                     if let Some(total) = t {
-                         state_percentage = (d as f32 / total as f32) * 100.0;
-                     }
+                     if let Some(total) = t { state_percentage = (d as f32 / total as f32) * 100.0; }
                 }
-
-                // Format Speed
-                if let Some(s) = progress_json.speed {
-                    speed_str = format_speed(s);
-                }
-
-                // Format ETA
-                if let Some(e) = progress_json.eta {
-                    eta_str = format_eta(e);
-                }
-                
-                // Filename update
+                if let Some(s) = progress_json.speed { speed_str = format_speed(s); }
+                if let Some(e) = progress_json.eta { eta_str = format_eta(e); }
                 if let Some(f) = progress_json.filename {
-                     // Check if it's actually the filename or full path
-                     let just_name = extract_filename_from_path(&f);
-                     if let Some(n) = just_name {
-                         if state_clean_title.is_none() {
-                             state_clean_title = extract_clean_title(&n);
-                         }
+                     if let Some(n) = extract_filename_from_path(&f) {
+                         if state_clean_title.is_none() { state_clean_title = extract_clean_title(&n); }
                          state_final_filename = Some(n);
                      }
                 }
                 
-                // Phase logic for pure download
                 if !state_phase.contains("Merging") && !state_phase.contains("Extracting") && !state_phase.contains("Writing") && !state_phase.contains("Embedding") {
                     state_phase = "Downloading".to_string();
                 }
-
-                if state_percentage >= 100.0 {
-                    release_network_slot(&manager, &app_handle, &mut network_slot_released);
-                }
-
                 emit_update = true;
-
             } else {
-                // 2. Fallback to Regex for Non-JSON Lines (Phase Detection)
-
                 if let Some(caps) = METADATA_REGEX.captures(trimmed) {
-                    release_network_slot(&manager, &app_handle, &mut network_slot_released);
-                    if let Some(f) = caps.name("filename") { 
-                        state_final_filename = extract_filename_from_path(f.as_str());
-                    }
+                    if let Some(f) = caps.name("filename") { state_final_filename = extract_filename_from_path(f.as_str()); }
                     state_phase = "Writing Metadata".to_string();
                     state_percentage = 99.0;
                     emit_update = true;
                 }
                 else if THUMBNAIL_REGEX.is_match(trimmed) {
-                    release_network_slot(&manager, &app_handle, &mut network_slot_released);
                     state_phase = "Embedding Thumbnail".to_string();
                     state_percentage = 99.0;
                     emit_update = true;
                 }
                 else if let Some(caps) = MERGER_REGEX.captures(trimmed) {
-                    release_network_slot(&manager, &app_handle, &mut network_slot_released);
                     if let Some(f) = caps.name("filename") {
                         state_final_filename = extract_filename_from_path(f.as_str());
                         state_clean_title = extract_clean_title(f.as_str()).or(state_clean_title);
@@ -434,7 +294,6 @@ pub async fn run_download_process(
                     emit_update = true;
                 }
                 else if let Some(caps) = EXTRACT_AUDIO_REGEX.captures(trimmed) {
-                    release_network_slot(&manager, &app_handle, &mut network_slot_released);
                     if let Some(f) = caps.name("filename") {
                         state_final_filename = extract_filename_from_path(f.as_str());
                         state_clean_title = extract_clean_title(f.as_str()).or(state_clean_title);
@@ -445,12 +304,10 @@ pub async fn run_download_process(
                     emit_update = true;
                 }
                 else if FIXUP_REGEX.is_match(trimmed) {
-                    release_network_slot(&manager, &app_handle, &mut network_slot_released);
                     state_phase = "Fixing Container".to_string();
                     emit_update = true;
                 }
                 else if let Some(caps) = ALREADY_DOWNLOADED_REGEX.captures(trimmed) {
-                    release_network_slot(&manager, &app_handle, &mut network_slot_released);
                     if let Some(f) = caps.name("filename") {
                         state_final_filename = extract_filename_from_path(f.as_str());
                         state_clean_title = extract_clean_title(f.as_str()).or(state_clean_title);
@@ -472,38 +329,18 @@ pub async fn run_download_process(
             }
 
             if emit_update {
-                // Update Native UI
-                {
-                    let mut lock = manager.lock().unwrap();
-                    lock.update_job_progress(job_id, state_percentage, &app_handle);
-                }
-
-                let _ = app_handle.emit_all("download-progress", DownloadProgressPayload {
-                    job_id,
+                 let _ = tx_actor.send(JobMessage::UpdateProgress {
+                    id: job_id,
                     percentage: state_percentage,
                     speed: speed_str,
                     eta: eta_str,
                     filename: state_clean_title.clone(),
-                    phase: Some(state_phase.clone()),
-                });
+                    phase: state_phase.clone()
+                }).await;
             }
         }
 
-        let status = child.wait().await.expect("Child process encountered an error");
-        release_network_slot(&manager, &app_handle, &mut network_slot_released);
-
-        // Cleanup Logic (Same as before)
-        let mut manager_lock = manager.lock().unwrap();
-        if let Some(job_status) = manager_lock.get_job_status(job_id) {
-            if job_status == JobStatus::Cancelled {
-                manager_lock.remove_job(job_id);
-                drop(manager_lock); 
-                let mut mgr = manager.lock().unwrap();
-                mgr.notify_process_finished(app_handle.clone());
-                return; 
-            }
-        }
-        drop(manager_lock);
+        let status = child.wait().await.expect("Child process error");
 
         if status.success() {
             if let Some(filename) = state_final_filename {
@@ -513,48 +350,20 @@ pub async fn run_download_process(
                 if src_path.exists() {
                     match robust_move_file(&src_path, &dest_path) {
                         Ok(_) => {
-                            let mut manager_lock = manager.lock().unwrap();
-                            manager_lock.update_job_status(job_id, JobStatus::Completed).ok();
-                            let _ = app_handle.emit_all("download-complete", DownloadCompletePayload {
-                                job_id,
-                                output_path: dest_path.to_string_lossy().to_string(),
-                            });
-                            manager_lock.remove_job(job_id);
-                            drop(manager_lock);
+                            let _ = tx_actor.send(JobMessage::JobCompleted { id: job_id, output_path: dest_path.to_string_lossy().to_string() }).await;
                             break;
                         },
                         Err(e) => {
-                            let mut manager_lock = manager.lock().unwrap();
-                            manager_lock.update_job_status(job_id, JobStatus::Error).ok();
-                            let _ = app_handle.emit_all("download-error", DownloadErrorPayload {
-                                job_id,
-                                error: format!("Download successful, but failed to move to destination: {}", e),
-                            });
-                            manager_lock.remove_job(job_id);
-                            drop(manager_lock);
+                            let _ = tx_actor.send(JobMessage::JobError { id: job_id, error: format!("Move failed: {}", e) }).await;
                             break;
                         }
                     }
                 } else {
-                     let mut manager_lock = manager.lock().unwrap();
-                     manager_lock.update_job_status(job_id, JobStatus::Error).ok();
-                     let _ = app_handle.emit_all("download-error", DownloadErrorPayload {
-                         job_id,
-                         error: "Output file not found in temporary directory.".to_string(),
-                     });
-                     manager_lock.remove_job(job_id);
-                     drop(manager_lock);
+                     let _ = tx_actor.send(JobMessage::JobError { id: job_id, error: "Output missing in temp dir".into() }).await;
                      break;
                 }
             } else {
-                let mut manager_lock = manager.lock().unwrap();
-                manager_lock.update_job_status(job_id, JobStatus::Error).ok();
-                let _ = app_handle.emit_all("download-error", DownloadErrorPayload {
-                    job_id,
-                    error: "Download finished, but filename could not be determined.".to_string(),
-                });
-                manager_lock.remove_job(job_id);
-                drop(manager_lock);
+                let _ = tx_actor.send(JobMessage::JobError { id: job_id, error: "Filename undetermined".into() }).await;
                 break;
             }
         } else {
@@ -563,21 +372,16 @@ pub async fn run_download_process(
             
             if !job_data.restrict_filenames && is_filesystem_error {
                 job_data.restrict_filenames = true;
-                continue; 
+                continue; // Retry Loop
             }
 
-            let mut manager_lock = manager.lock().unwrap();
-            manager_lock.update_job_status(job_id, JobStatus::Error).ok();
-            let _ = app_handle.emit_all("download-error", DownloadErrorPayload {
-                job_id,
-                error: format!("yt-dlp exited with code {}.\nLast Logs:\n{}", status.code().unwrap_or(-1), log_blob),
-            });
-            manager_lock.remove_job(job_id);
-            drop(manager_lock);
+            let _ = tx_actor.send(JobMessage::JobError { 
+                id: job_id, 
+                error: format!("Exit Code {}. Logs: {}", status.code().unwrap_or(-1), log_blob) 
+            }).await;
             break;
         }
     }
     
-    let mut mgr = manager.lock().unwrap();
-    mgr.notify_process_finished(app_handle.clone());
+    let _ = tx_actor.send(JobMessage::WorkerFinished).await;
 }

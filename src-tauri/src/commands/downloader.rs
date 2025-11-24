@@ -1,14 +1,12 @@
-use std::sync::{Arc, Mutex};
-use tauri::{AppHandle, State};
+use tauri::{State};
 use uuid::Uuid;
 use std::process::Command;
-use std::fs;
 
 use crate::core::{
     error::AppError,
-    manager::JobManager,
+    manager::{JobManagerHandle},
 };
-use crate::models::{DownloadFormatPreset, QueuedJob, PlaylistResult, PlaylistEntry, JobStatus};
+use crate::models::{DownloadFormatPreset, QueuedJob, PlaylistResult, PlaylistEntry};
 
 // Helper: Probes the URL to see if it's a playlist or single video
 fn probe_url(url: &str) -> Result<Vec<PlaylistEntry>, AppError> {
@@ -18,7 +16,6 @@ fn probe_url(url: &str) -> Result<Vec<PlaylistEntry>, AppError> {
        .arg("--no-warnings")
        .arg(url);
 
-    // SILENCE WINDOW ON WINDOWS
     #[cfg(target_os = "windows")]
     {
         use std::os::windows::process::CommandExt;
@@ -51,7 +48,6 @@ fn probe_url(url: &str) -> Result<Vec<PlaylistEntry>, AppError> {
             }
         }
     } else {
-        // Fallback for single video
         entries.push(PlaylistEntry {
             id: parsed.get("id").and_then(|s| s.as_str()).map(|s| s.to_string()),
             url: parsed.get("webpage_url").and_then(|s| s.as_str()).unwrap_or(url).to_string(),
@@ -78,8 +74,7 @@ pub async fn start_download(
     embed_thumbnail: bool,
     filename_template: String,
     restrict_filenames: Option<bool>,
-    app_handle: AppHandle,
-    manager: State<'_, Arc<Mutex<JobManager>>>,
+    manager: State<'_, JobManagerHandle>, 
 ) -> Result<Vec<Uuid>, AppError> { 
     
     if !url.starts_with("http://") && !url.starts_with("https://") {
@@ -96,9 +91,7 @@ pub async fn start_download(
     };
 
     let entries = probe_url(&url)?;
-
     let mut created_job_ids = Vec::new();
-    let mut manager_lock = manager.lock().unwrap();
 
     for entry in entries {
         let job_id = Uuid::new_v4();
@@ -115,7 +108,9 @@ pub async fn start_download(
             restrict_filenames: restrict_filenames.unwrap_or(false),
         };
 
-        manager_lock.add_job(job_data, app_handle.clone())?;
+        manager.add_job(job_data).await
+            .map_err(|e| AppError::ValidationFailed(e))?;
+            
         created_job_ids.push(job_id);
     }
 
@@ -123,104 +118,28 @@ pub async fn start_download(
 }
 
 #[tauri::command]
-pub fn cancel_download(
+pub async fn cancel_download(
     job_id: Uuid,
-    manager: State<'_, Arc<Mutex<JobManager>>>,
+    manager: State<'_, JobManagerHandle>,
 ) -> Result<(), AppError> {
-    let mut manager = manager.lock().unwrap();
-    
-    if let Some(pid) = manager.get_job_pid(job_id) {
-        #[cfg(not(windows))]
-        {
-            use nix::sys::signal::{self, Signal};
-            use nix::unistd::Pid;
-            let pid_to_kill = Pid::from_raw(pid as i32);
-            if let Err(e) = signal::kill(pid_to_kill, Signal::SIGINT) {
-                return Err(AppError::ProcessKillFailed(format!("Failed to send SIGINT: {}", e)));
-            }
-        }
-
-        #[cfg(windows)]
-        {
-            let mut cmd = std::process::Command::new("taskkill");
-            cmd.args(&["/F", "/T", "/PID", &pid.to_string()]);
-            cmd.stdout(std::process::Stdio::null());
-            cmd.stderr(std::process::Stdio::null());
-            
-            use std::os::windows::process::CommandExt;
-            cmd.creation_flags(0x08000000); 
-
-            let status = cmd.status();
-            if let Err(e) = status {
-                 return Err(AppError::ProcessKillFailed(format!("Failed to execute taskkill: {}", e)));
-            }
-        }
-        
-        manager.update_job_status(job_id, JobStatus::Cancelled)?;
-        Ok(())
-    } else {
-        if manager.get_job_status(job_id).is_some() {
-             manager.update_job_status(job_id, JobStatus::Cancelled)?;
-             manager.remove_job(job_id); 
-             Ok(())
-        } else {
-            Err(AppError::JobNotFound)
-        }
-    }
-}
-
-// --- PERSISTENCE COMMANDS ---
-
-fn get_jobs_file_path() -> std::path::PathBuf {
-    let home = dirs::home_dir().expect("Could not find home directory");
-    home.join(".multiyt-dlp").join("jobs.json")
+    manager.cancel_job(job_id).await;
+    Ok(())
 }
 
 #[tauri::command]
-pub fn get_pending_jobs() -> Result<u32, String> {
-    let path = get_jobs_file_path();
-    if !path.exists() {
-        return Ok(0);
-    }
-    
-    let content = fs::read_to_string(path).map_err(|e| e.to_string())?;
-    let jobs: Vec<QueuedJob> = serde_json::from_str(&content).unwrap_or_default();
-    
-    Ok(jobs.len() as u32)
+pub async fn get_pending_jobs(manager: State<'_, JobManagerHandle>) -> Result<u32, String> {
+    Ok(manager.get_pending_count().await)
 }
 
 #[tauri::command]
 pub async fn resume_pending_jobs(
-    app_handle: AppHandle,
-    manager: State<'_, Arc<Mutex<JobManager>>>
-) -> Result<Vec<QueuedJob>, String> { // CHANGED: Returns full struct Vec<QueuedJob>
-    let path = get_jobs_file_path();
-    if !path.exists() {
-        return Ok(vec![]);
-    }
-
-    let content = fs::read_to_string(&path).map_err(|e| e.to_string())?;
-    let jobs: Vec<QueuedJob> = serde_json::from_str(&content).map_err(|e| e.to_string())?;
-
-    let mut resumed_jobs = Vec::new();
-    let mut manager_lock = manager.lock().unwrap();
-
-    for job in jobs {
-        if let Ok(_) = manager_lock.add_job(job.clone(), app_handle.clone()) {
-            resumed_jobs.push(job);
-        }
-    }
-
-    Ok(resumed_jobs)
+    manager: State<'_, JobManagerHandle>
+) -> Result<Vec<QueuedJob>, String> {
+    Ok(manager.resume_pending().await)
 }
 
 #[tauri::command]
-pub fn clear_pending_jobs(manager: State<'_, Arc<Mutex<JobManager>>>) -> Result<(), String> {
-    let path = get_jobs_file_path();
-    if path.exists() {
-        fs::remove_file(path).map_err(|e| e.to_string())?;
-    }
-    let mgr = manager.lock().unwrap();
-    mgr.clean_temp_directory();
+pub async fn clear_pending_jobs(manager: State<'_, JobManagerHandle>) -> Result<(), String> {
+    manager.clear_pending().await;
     Ok(())
 }

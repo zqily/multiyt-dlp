@@ -33,8 +33,6 @@ export interface AppConfig {
   window: WindowConfig;
 }
 
-// --- Dependencies Types ---
-
 export interface DependencyInfo {
     name: string;
     available: boolean;
@@ -74,6 +72,11 @@ export interface DownloadProgressPayload {
   phase?: string;    
 }
 
+// NEW BATCH PAYLOAD
+export interface BatchProgressPayload {
+    updates: DownloadProgressPayload[];
+}
+
 export interface DownloadCompletePayload {
   jobId: string;
   outputPath: string;
@@ -98,7 +101,6 @@ export interface Download {
   filename?: string;
   phase?: string;
   
-  // Config saved for Retry logic
   preset?: DownloadFormatPreset; 
   videoResolution?: string;
   downloadPath?: string;
@@ -108,7 +110,6 @@ export interface Download {
   restrictFilenames?: boolean;
 }
 
-// NEW: Matching Rust QueuedJob struct
 export interface QueuedJob {
   id: string; 
   url: string;

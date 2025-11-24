@@ -1,13 +1,13 @@
 // Prevents additional console window on Windows in release, DO NOT REMOVE!!
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use tauri::{Manager, WindowEvent};
 use tokio::sync::mpsc;
 use std::time::Duration;
 use std::fs;
 
-use crate::core::manager::JobManager;
+use crate::core::manager::JobManagerHandle;
 use crate::config::ConfigManager;
 use crate::core::logging::LogManager;
 
@@ -17,7 +17,6 @@ mod models;
 mod config;
 
 fn main() {
-    // Initialize Temp Dir structure at startup
     let home = dirs::home_dir().expect("Could not find home directory");
     let temp_dir = home.join(".multiyt-dlp").join("temp_downloads");
     if !temp_dir.exists() {
@@ -26,22 +25,22 @@ fn main() {
 
     let config_manager = Arc::new(ConfigManager::new());
     let initial_config = config_manager.get_config();
-    
     let log_manager = LogManager::init(&initial_config.general.log_level);
 
-    let job_manager = Arc::new(Mutex::new(JobManager::new()));
-
+    // Persistence config auto-save channel
     let config_manager_setup = config_manager.clone();
     let config_manager_event = config_manager.clone();
     let config_manager_saver = config_manager.clone();
-
     let (tx_save, mut rx_save) = mpsc::unbounded_channel::<()>();
 
     tauri::Builder::default()
-        .manage(job_manager)
         .manage(config_manager)
         .manage(log_manager)
         .setup(move |app| {
+            // Initialize the Actor Handle here
+            let job_manager_handle = JobManagerHandle::new(app.handle());
+            app.manage(job_manager_handle);
+
             let main_window = app.get_window("main").unwrap();
             let config = config_manager_setup.get_config();
             
@@ -71,8 +70,6 @@ fn main() {
         .on_window_event(move |event| {
             if let WindowEvent::Destroyed = event.event() {
                 let window_label = event.window().label();
-                
-                // Handle Splash Screen close -> Exit if main not ready
                 if window_label == "splashscreen" {
                     let app_handle = event.window().app_handle();
                     if let Some(main) = app_handle.get_window("main") {
@@ -83,8 +80,6 @@ fn main() {
                         app_handle.exit(0);
                     }
                 }
-
-                // Handle Main Window Close -> Exit
                 if window_label == "main" {
                     event.window().app_handle().exit(0);
                 }
@@ -115,7 +110,7 @@ fn main() {
             commands::system::open_external_link,
             commands::system::close_splash,
             commands::system::get_latest_app_version, 
-            commands::system::show_in_folder, // NEW REGISTERED COMMAND
+            commands::system::show_in_folder, 
             commands::downloader::start_download,
             commands::downloader::cancel_download,
             commands::downloader::expand_playlist,

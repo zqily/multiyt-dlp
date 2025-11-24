@@ -1,42 +1,52 @@
 import { useState, useEffect, useCallback } from 'react';
 import { listen } from '@tauri-apps/api/event';
-import { Download, DownloadCompletePayload, DownloadErrorPayload, DownloadProgressPayload, DownloadFormatPreset, QueuedJob } from '@/types';
+import { Download, DownloadCompletePayload, DownloadErrorPayload, BatchProgressPayload, DownloadFormatPreset, QueuedJob } from '@/types';
 import { startDownload as apiStartDownload, cancelDownload as apiCancelDownload } from '@/api/invoke';
 
 export function useDownloadManager() {
   const [downloads, setDownloads] = useState<Map<string, Download>>(new Map());
 
-  const updateDownload = (jobId: string, newProps: Partial<Download>) => {
+  // Consolidated update function for batching
+  const updateDownloadsBatch = (updates: { jobId: string, data: Partial<Download> }[]) => {
     setDownloads((prev) => {
-      const newMap = new Map(prev);
-      const existing = newMap.get(jobId);
-      
-      if (existing) {
-        newMap.set(jobId, { ...existing, ...newProps });
-      } else {
-        // Fallback for immediate event catch before state hydration (safety net)
-        newMap.set(jobId, {
-            jobId,
-            url: newProps.filename || 'Resumed Download',
-            status: newProps.status || 'downloading',
-            progress: newProps.progress || 0,
-            ...newProps
-        } as Download);
-      }
-      return newMap;
+        const newMap = new Map(prev);
+        updates.forEach(update => {
+            const existing = newMap.get(update.jobId);
+            if (existing) {
+                newMap.set(update.jobId, { ...existing, ...update.data });
+            } else {
+                newMap.set(update.jobId, {
+                    jobId: update.jobId,
+                    url: update.data.filename || 'Resumed Download',
+                    status: update.data.status || 'downloading',
+                    progress: update.data.progress || 0,
+                    ...update.data
+                } as Download);
+            }
+        });
+        return newMap;
     });
   };
 
+  const updateDownload = (jobId: string, newProps: Partial<Download>) => {
+      updateDownloadsBatch([{ jobId, data: newProps }]);
+  };
+
   useEffect(() => {
-    const unlistenProgress = listen<DownloadProgressPayload>('download-progress', (event) => {
-      updateDownload(event.payload.jobId, {
-        status: 'downloading',
-        progress: event.payload.percentage,
-        speed: event.payload.speed,
-        eta: event.payload.eta,
-        filename: event.payload.filename,
-        phase: event.payload.phase,
-      });
+    // UPDATED: Listen for Batch Events instead of single events
+    const unlistenProgress = listen<BatchProgressPayload>('download-progress-batch', (event) => {
+        const updates = event.payload.updates.map(u => ({
+            jobId: u.jobId,
+            data: {
+                status: 'downloading' as const,
+                progress: u.percentage,
+                speed: u.speed,
+                eta: u.eta,
+                filename: u.filename,
+                phase: u.phase
+            }
+        }));
+        updateDownloadsBatch(updates);
     });
 
     const unlistenComplete = listen<DownloadCompletePayload>('download-complete', (event) => {
@@ -86,7 +96,6 @@ export function useDownloadManager() {
       
       setDownloads((prev) => {
         const newMap = new Map(prev);
-        
         jobIds.forEach(jobId => {
             newMap.set(jobId, {
               jobId,
@@ -102,7 +111,6 @@ export function useDownloadManager() {
               restrictFilenames
             });
         });
-        
         return newMap;
       });
     } catch (error) {
@@ -111,7 +119,6 @@ export function useDownloadManager() {
     }
   }, []);
 
-  // NEW: Manual hydration method for resumed jobs
   const importResumedJobs = useCallback((jobs: QueuedJob[]) => {
       setDownloads((prev) => {
           const newMap = new Map(prev);
@@ -119,7 +126,7 @@ export function useDownloadManager() {
               newMap.set(job.id, {
                   jobId: job.id,
                   url: job.url,
-                  status: 'pending', // Will switch to downloading via event shortly
+                  status: 'pending',
                   progress: 0,
                   preset: job.format_preset,
                   videoResolution: job.video_resolution,

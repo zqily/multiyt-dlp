@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
+use tokio::sync::oneshot;
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
 pub enum JobStatus {
@@ -10,16 +11,13 @@ pub enum JobStatus {
     Error,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)] // Added Deserialize
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum DownloadFormatPreset {
-    // Video + Audio (Merged)
     Best,
     BestMp4,
     BestMkv,
     BestWebm,
-    
-    // Audio Only
     AudioBest,
     AudioMp3,
     AudioFlac,
@@ -28,16 +26,18 @@ pub enum DownloadFormatPreset {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct Job {
+    pub id: Uuid,
     pub url: String,
     pub pid: Option<u32>,
     pub status: JobStatus,
-    pub progress: f32, // Changed: Added progress field
+    pub progress: f32,
     pub output_path: Option<String>,
 }
 
 impl Job {
-    pub fn new(url: String) -> Self {
+    pub fn new(id: Uuid, url: String) -> Self {
         Self {
+            id,
             url,
             pid: None,
             status: JobStatus::Pending,
@@ -47,9 +47,7 @@ impl Job {
     }
 }
 
-// --- Queue Struct ---
-// Holds all data needed to spawn the process later
-#[derive(Debug, Clone, Serialize, Deserialize)] // Added Serialize, Deserialize
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct QueuedJob {
     pub id: Uuid,
     pub url: String,
@@ -90,6 +88,11 @@ pub struct DownloadProgressPayload {
 }
 
 #[derive(Clone, serde::Serialize)]
+pub struct BatchProgressPayload {
+    pub updates: Vec<DownloadProgressPayload>,
+}
+
+#[derive(Clone, serde::Serialize)]
 pub struct DownloadCompletePayload {
     #[serde(rename = "jobId")]
     pub job_id: Uuid,
@@ -102,4 +105,45 @@ pub struct DownloadErrorPayload {
     #[serde(rename = "jobId")]
     pub job_id: Uuid,
     pub error: String,
+}
+
+// --- Actor Messages ---
+
+pub enum JobMessage {
+    /// Add a new job to the queue
+    AddJob { job: QueuedJob, resp: oneshot::Sender<Result<(), String>> },
+    
+    /// User requested cancellation
+    CancelJob { id: Uuid },
+
+    /// Update status/progress from the process thread
+    UpdateProgress { 
+        id: Uuid, 
+        percentage: f32, 
+        speed: String, 
+        eta: String, 
+        filename: Option<String>, 
+        phase: String 
+    },
+
+    /// Process started, link PID
+    ProcessStarted { id: Uuid, pid: u32 },
+
+    /// Process finished successfully
+    JobCompleted { id: Uuid, output_path: String },
+
+    /// Process failed or error occurred
+    JobError { id: Uuid, error: String },
+
+    /// Worker thread finished (cleanup slot)
+    WorkerFinished,
+
+    /// Request a snapshot of pending jobs (for persistence check)
+    GetPendingCount(oneshot::Sender<u32>),
+
+    /// Request resume of all persistence jobs
+    ResumePending(oneshot::Sender<Vec<QueuedJob>>),
+
+    /// Clear persistence
+    ClearPending,
 }

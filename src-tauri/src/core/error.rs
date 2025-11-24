@@ -12,15 +12,6 @@ pub enum AppError {
 
     #[error("Validation failed: {0}")]
     ValidationFailed(String),
-
-    #[error("A download for this URL is already in progress.")]
-    JobAlreadyExists,
-
-    #[error("Job with the specified ID was not found.")]
-    JobNotFound,
-
-    #[error("Failed to kill process: {0}")]
-    ProcessKillFailed(String),
 }
 
 // Required to convert from std::io::Error
