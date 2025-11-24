@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from 'react';
 import { syncDependencies, closeSplash } from '@/api/invoke';
 import { listen } from '@tauri-apps/api/event';
 import { getVersion } from '@tauri-apps/api/app';
-import icon from '@/assets/icon.png';
+import icon from '@/assets/icon.webp';
 import { RefreshCw, AlertTriangle, ShieldCheck } from 'lucide-react';
 import { Progress } from './ui/Progress';
 import { Button } from './ui/Button';

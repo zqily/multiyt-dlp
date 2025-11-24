@@ -3,7 +3,7 @@ import { getName } from '@tauri-apps/api/app';
 import { checkDependencies, installDependency, openExternalLink } from '@/api/invoke';
 import { DependencyInfo } from '@/types';
 import { Copy, Check, Terminal, AlertCircle, Cpu, Download, Loader2, ArrowUpCircle, RefreshCw } from 'lucide-react';
-import icon from '@/assets/icon.png';
+import icon from '@/assets/icon.webp';
 import { Button } from '../ui/Button';
 import { useAppContext } from '@/contexts/AppContext';
 
