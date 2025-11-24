@@ -8,6 +8,7 @@ use tokio::process::Command;
 use tokio::sync::mpsc;
 use std::path::{Path, PathBuf};
 use std::fs;
+use serde::Deserialize;
 
 use crate::core::manager::JobManager;
 use crate::config::ConfigManager;
@@ -15,7 +16,7 @@ use crate::models::{DownloadCompletePayload, DownloadErrorPayload, DownloadProgr
 use crate::commands::system::get_js_runtime_info;
 
 // --- Regex Definitions ---
-static PROGRESS_REGEX: Lazy<Regex> = Lazy::new(|| Regex::new(r"\[download\]\s+(?P<percentage>[\d\.]+)%\s+of\s+~?\s*(?P<size>[^\s]+)(?:\s+at\s+(?P<speed>[^\s]+(?:\s+B/s)?))?(?:\s+ETA\s+(?P<eta>[^\s]+))?").unwrap());
+// Note: Progress scraping regex has been removed in favor of JSON parsing
 static DESTINATION_REGEX: Lazy<Regex> = Lazy::new(|| Regex::new(r"^\[download\]\s+Destination:\s+(?P<filename>.+)$").unwrap());
 static ALREADY_DOWNLOADED_REGEX: Lazy<Regex> = Lazy::new(|| Regex::new(r"\[download\]\s+(?:Destination:\s+)?(?P<filename>.+?)\s+has already been downloaded").unwrap());
 static MERGER_REGEX: Lazy<Regex> = Lazy::new(|| Regex::new(r#"\[Merger\]\s+Merging formats into\s+"?(?P<filename>.+?)"?$"#).unwrap());
@@ -25,6 +26,22 @@ static THUMBNAIL_REGEX: Lazy<Regex> = Lazy::new(|| Regex::new(r"^\[(?:Thumbnails
 static FIXUP_REGEX: Lazy<Regex> = Lazy::new(|| Regex::new(r"^\[(?:Fixup\w+)\]").unwrap());
 static TITLE_CLEANER_REGEX: Lazy<Regex> = Lazy::new(|| Regex::new(r"\s\[[a-zA-Z0-9_-]{11}\]\.(?:f[0-9]+\.)?[a-z0-9]+$").unwrap());
 static FILESYSTEM_ERROR_REGEX: Lazy<Regex> = Lazy::new(|| Regex::new(r"(?i)(No such file|Invalid argument|cannot be written|WinError 123|Postprocessing: Error opening input files)").unwrap());
+
+// --- JSON Structs for yt-dlp Output ---
+
+#[derive(Deserialize, Debug)]
+struct YtDlpJsonProgress {
+    downloaded_bytes: Option<u64>,
+    total_bytes: Option<u64>,
+    total_bytes_estimate: Option<u64>,
+    speed: Option<f64>, // bytes per second
+    eta: Option<u64>,   // seconds
+    filename: Option<String>,
+    // Optional: We can use this if we want exact text, but we calculate it ourselves for consistency
+    // _percent_str: Option<String>, 
+}
+
+// --- Helpers ---
 
 fn robust_move_file(src: &Path, dest: &Path) -> Result<(), std::io::Error> {
     if let Err(_) = fs::rename(src, dest) {
@@ -45,6 +62,37 @@ fn emit_error(job_id: uuid::Uuid, error: String, app_handle: &AppHandle, manager
     });
 }
 
+fn format_speed(bytes_per_sec: f64) -> String {
+    if bytes_per_sec.is_nan() || bytes_per_sec.is_infinite() { return "N/A".to_string(); }
+    
+    const KIB: f64 = 1024.0;
+    const MIB: f64 = KIB * 1024.0;
+    const GIB: f64 = MIB * 1024.0;
+
+    if bytes_per_sec >= GIB {
+        format!("{:.2} GiB/s", bytes_per_sec / GIB)
+    } else if bytes_per_sec >= MIB {
+        format!("{:.2} MiB/s", bytes_per_sec / MIB)
+    } else if bytes_per_sec >= KIB {
+        format!("{:.2} KiB/s", bytes_per_sec / KIB)
+    } else {
+        format!("{:.0} B/s", bytes_per_sec)
+    }
+}
+
+fn format_eta(seconds: u64) -> String {
+    let h = seconds / 3600;
+    let m = (seconds % 3600) / 60;
+    let s = seconds % 60;
+    if h > 0 {
+        format!("{:02}:{:02}:{:02}", h, m, s)
+    } else {
+        format!("{:02}:{:02}", m, s)
+    }
+}
+
+// --- Main Process Logic ---
+
 pub async fn run_download_process(
     mut job_data: QueuedJob,
     app_handle: AppHandle,
@@ -53,7 +101,7 @@ pub async fn run_download_process(
     let job_id = job_data.id;
     let url = job_data.url.clone();
 
-    // --- ISSUE 3 FIX: EMIT INITIALIZING EVENT IMMEDIATELY ---
+    // Initial event
     let _ = app_handle.emit_all("download-progress", DownloadProgressPayload {
         job_id,
         percentage: 0.0,
@@ -63,16 +111,16 @@ pub async fn run_download_process(
         phase: Some("Initializing Process...".to_string()),
     });
 
-    // Retrieve Global Config (ConfigManager is thread-safe)
     let config_manager = app_handle.state::<Arc<ConfigManager>>();
 
     loop {
-        // Refresh config on every retry loop to catch immediate changes
+        // Refresh config on retry
         let general_config = config_manager.get_config().general;
 
         let app_dir = app_handle.path_resolver().app_data_dir().unwrap();
         let bin_dir = app_dir.join("bin");
         
+        // Resolve Paths
         let target_dir = if let Some(ref path) = job_data.download_path {
             PathBuf::from(path)
         } else {
@@ -101,6 +149,7 @@ pub async fn run_download_process(
             }
         }
 
+        // Resolve Binary
         let mut yt_dlp_cmd = "yt-dlp".to_string();
         let local_exe = bin_dir.join(if cfg!(windows) { "yt-dlp.exe" } else { "yt-dlp" });
         if local_exe.exists() {
@@ -109,6 +158,7 @@ pub async fn run_download_process(
 
         let mut cmd = Command::new(yt_dlp_cmd);
         
+        // Environment
         if let Ok(current_path) = std::env::var("PATH") {
             let new_path = format!("{}{}{}", bin_dir.to_string_lossy(), if cfg!(windows) { ";" } else { ":" }, current_path);
             cmd.env("PATH", new_path);
@@ -118,14 +168,15 @@ pub async fn run_download_process(
         
         cmd.env("PYTHONUTF8", "1");
         cmd.env("PYTHONIOENCODING", "utf-8");
-        
         cmd.current_dir(&temp_dir);
 
+        // JS Runtime
         if let Some((name, path)) = get_js_runtime_info(&bin_dir) {
             cmd.arg("--js-runtimes");
             cmd.arg(format!("{}:{}", name, path));
         }
 
+        // Cookies
         if let Some(cookie_path) = &general_config.cookies_path {
             if !cookie_path.trim().is_empty() {
                 cmd.arg("--cookies").arg(cookie_path);
@@ -136,6 +187,7 @@ pub async fn run_download_process(
             }
         }
 
+        // --- Core Arguments ---
         cmd.arg(&url)
             .arg("-o")
             .arg(&job_data.filename_template) 
@@ -144,9 +196,16 @@ pub async fn run_download_process(
             .arg("--newline")
             .arg("--windows-filenames")
             .arg("--encoding")
-            .arg("utf-8")
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
+            .arg("utf-8");
+
+        // --- Progress Template (JSON) ---
+        // This instructs yt-dlp to output a JSON object on a new line for every progress update.
+        // Format: download:{ ...json... }
+        cmd.arg("--progress-template").arg("download:%(progress)j");
+
+        // Stdio
+        cmd.stdout(Stdio::piped());
+        cmd.stderr(Stdio::piped());
 
         #[cfg(target_os = "windows")]
         {
@@ -161,6 +220,7 @@ pub async fn run_download_process(
         if job_data.embed_metadata { cmd.arg("--embed-metadata"); }
         if job_data.embed_thumbnail { cmd.arg("--embed-thumbnail"); }
 
+        // Formats
         let height_filter = if job_data.video_resolution != "best" {
             let number_part: String = job_data.video_resolution.chars().filter(|c| c.is_numeric()).collect();
             if !number_part.is_empty() { format!("[height<={}]", number_part) } else { String::new() }
@@ -190,6 +250,7 @@ pub async fn run_download_process(
             DownloadFormatPreset::AudioM4a => { cmd.arg("-x").args(["--audio-format", "m4a", "--audio-quality", "0"]); }
         }
 
+        // Spawn
         let mut child = match cmd.spawn() {
             Ok(child) => child,
             Err(e) => {
@@ -222,6 +283,7 @@ pub async fn run_download_process(
             return;
         }
 
+        // Retry notification
         if job_data.restrict_filenames {
             let _ = app_handle.emit_all("download-progress", DownloadProgressPayload {
                 job_id,
@@ -233,6 +295,7 @@ pub async fn run_download_process(
             });
         }
 
+        // Log Streaming
         let stdout = child.stdout.take().expect("Failed to capture stdout");
         let stderr = child.stderr.take().expect("Failed to capture stderr");
         let (tx, mut rx) = mpsc::channel::<String>(100);
@@ -292,95 +355,124 @@ pub async fn run_download_process(
             if captured_logs.len() > 100 { captured_logs.remove(0); }
 
             let mut emit_update = false;
-            let mut speed = "N/A".to_string();
-            let mut eta = "N/A".to_string();
+            let mut speed_str = "N/A".to_string();
+            let mut eta_str = "N/A".to_string();
 
-            if let Some(caps) = METADATA_REGEX.captures(trimmed) {
-                release_network_slot(&manager, &app_handle, &mut network_slot_released);
-                if let Some(f) = caps.name("filename") { 
-                    state_final_filename = extract_filename_from_path(f.as_str());
+            // 1. Attempt JSON Parsing (Progress Updates)
+            // yt-dlp may output the JSON object directly if configured via --progress-template
+            if let Ok(progress_json) = serde_json::from_str::<YtDlpJsonProgress>(trimmed) {
+                // Successful JSON Parse!
+                
+                // Calculate Percentage
+                if let Some(d) = progress_json.downloaded_bytes {
+                     let t = progress_json.total_bytes.or(progress_json.total_bytes_estimate);
+                     if let Some(total) = t {
+                         state_percentage = (d as f32 / total as f32) * 100.0;
+                     }
                 }
-                state_phase = "Writing Metadata".to_string();
-                state_percentage = 99.0;
-                emit_update = true;
-            }
-            else if THUMBNAIL_REGEX.is_match(trimmed) {
-                release_network_slot(&manager, &app_handle, &mut network_slot_released);
-                state_phase = "Embedding Thumbnail".to_string();
-                state_percentage = 99.0;
-                emit_update = true;
-            }
-            else if let Some(caps) = MERGER_REGEX.captures(trimmed) {
-                release_network_slot(&manager, &app_handle, &mut network_slot_released);
-                if let Some(f) = caps.name("filename") {
-                    state_final_filename = extract_filename_from_path(f.as_str());
-                    state_clean_title = extract_clean_title(f.as_str()).or(state_clean_title);
+
+                // Format Speed
+                if let Some(s) = progress_json.speed {
+                    speed_str = format_speed(s);
                 }
-                state_phase = "Merging Formats".to_string();
-                state_percentage = 100.0;
-                eta = "Done".to_string();
-                emit_update = true;
-            }
-            else if let Some(caps) = EXTRACT_AUDIO_REGEX.captures(trimmed) {
-                release_network_slot(&manager, &app_handle, &mut network_slot_released);
-                if let Some(f) = caps.name("filename") {
-                    state_final_filename = extract_filename_from_path(f.as_str());
-                    state_clean_title = extract_clean_title(f.as_str()).or(state_clean_title);
+
+                // Format ETA
+                if let Some(e) = progress_json.eta {
+                    eta_str = format_eta(e);
                 }
-                state_phase = "Extracting Audio".to_string();
-                state_percentage = 100.0;
-                eta = "Done".to_string();
-                emit_update = true;
-            }
-            else if FIXUP_REGEX.is_match(trimmed) {
-                release_network_slot(&manager, &app_handle, &mut network_slot_released);
-                state_phase = "Fixing Container".to_string();
-                emit_update = true;
-            }
-            else if let Some(caps) = ALREADY_DOWNLOADED_REGEX.captures(trimmed) {
-                release_network_slot(&manager, &app_handle, &mut network_slot_released);
-                if let Some(f) = caps.name("filename") {
-                    state_final_filename = extract_filename_from_path(f.as_str());
-                    state_clean_title = extract_clean_title(f.as_str()).or(state_clean_title);
+                
+                // Filename update
+                if let Some(f) = progress_json.filename {
+                     // Check if it's actually the filename or full path
+                     let just_name = extract_filename_from_path(&f);
+                     if let Some(n) = just_name {
+                         if state_clean_title.is_none() {
+                             state_clean_title = extract_clean_title(&n);
+                         }
+                         state_final_filename = Some(n);
+                     }
                 }
-                state_phase = "Finished".to_string();
-                state_percentage = 100.0;
-                eta = "Done".to_string();
-                emit_update = true;
-            }
-            else if let Some(caps) = DESTINATION_REGEX.captures(trimmed) {
-                if let Some(f) = caps.name("filename") {
-                    let full_path_str = f.as_str();
-                    if state_clean_title.is_none() { state_clean_title = extract_clean_title(full_path_str); }
-                    state_final_filename = extract_filename_from_path(full_path_str);
+                
+                // Phase logic for pure download
+                if !state_phase.contains("Merging") && !state_phase.contains("Extracting") && !state_phase.contains("Writing") && !state_phase.contains("Embedding") {
                     state_phase = "Downloading".to_string();
+                }
+
+                if state_percentage >= 100.0 {
+                    release_network_slot(&manager, &app_handle, &mut network_slot_released);
+                }
+
+                emit_update = true;
+
+            } else {
+                // 2. Fallback to Regex for Non-JSON Lines (Phase Detection)
+
+                if let Some(caps) = METADATA_REGEX.captures(trimmed) {
+                    release_network_slot(&manager, &app_handle, &mut network_slot_released);
+                    if let Some(f) = caps.name("filename") { 
+                        state_final_filename = extract_filename_from_path(f.as_str());
+                    }
+                    state_phase = "Writing Metadata".to_string();
+                    state_percentage = 99.0;
                     emit_update = true;
                 }
-            }
-            else if let Some(caps) = PROGRESS_REGEX.captures(trimmed) {
-                if let Some(percentage_str) = caps.name("percentage") {
-                    if let Ok(p) = percentage_str.as_str().parse::<f32>() {
-                        state_percentage = p;
-                        if p >= 100.0 {
-                            release_network_slot(&manager, &app_handle, &mut network_slot_released);
-                        }
-                        if let Some(s) = caps.name("speed") {
-                            let s_str = s.as_str();
-                            if !s_str.contains("N/A") { speed = s_str.to_string(); }
-                        }
-                        if let Some(e) = caps.name("eta") {
-                            eta = e.as_str().to_string();
-                        }
-                        if !state_phase.contains("Merging") && !state_phase.contains("Extracting") && !state_phase.contains("Writing") && !state_phase.contains("Embedding") {
-                            state_phase = "Downloading".to_string();
-                        }
+                else if THUMBNAIL_REGEX.is_match(trimmed) {
+                    release_network_slot(&manager, &app_handle, &mut network_slot_released);
+                    state_phase = "Embedding Thumbnail".to_string();
+                    state_percentage = 99.0;
+                    emit_update = true;
+                }
+                else if let Some(caps) = MERGER_REGEX.captures(trimmed) {
+                    release_network_slot(&manager, &app_handle, &mut network_slot_released);
+                    if let Some(f) = caps.name("filename") {
+                        state_final_filename = extract_filename_from_path(f.as_str());
+                        state_clean_title = extract_clean_title(f.as_str()).or(state_clean_title);
+                    }
+                    state_phase = "Merging Formats".to_string();
+                    state_percentage = 100.0;
+                    eta_str = "Done".to_string();
+                    emit_update = true;
+                }
+                else if let Some(caps) = EXTRACT_AUDIO_REGEX.captures(trimmed) {
+                    release_network_slot(&manager, &app_handle, &mut network_slot_released);
+                    if let Some(f) = caps.name("filename") {
+                        state_final_filename = extract_filename_from_path(f.as_str());
+                        state_clean_title = extract_clean_title(f.as_str()).or(state_clean_title);
+                    }
+                    state_phase = "Extracting Audio".to_string();
+                    state_percentage = 100.0;
+                    eta_str = "Done".to_string();
+                    emit_update = true;
+                }
+                else if FIXUP_REGEX.is_match(trimmed) {
+                    release_network_slot(&manager, &app_handle, &mut network_slot_released);
+                    state_phase = "Fixing Container".to_string();
+                    emit_update = true;
+                }
+                else if let Some(caps) = ALREADY_DOWNLOADED_REGEX.captures(trimmed) {
+                    release_network_slot(&manager, &app_handle, &mut network_slot_released);
+                    if let Some(f) = caps.name("filename") {
+                        state_final_filename = extract_filename_from_path(f.as_str());
+                        state_clean_title = extract_clean_title(f.as_str()).or(state_clean_title);
+                    }
+                    state_phase = "Finished".to_string();
+                    state_percentage = 100.0;
+                    eta_str = "Done".to_string();
+                    emit_update = true;
+                }
+                else if let Some(caps) = DESTINATION_REGEX.captures(trimmed) {
+                    if let Some(f) = caps.name("filename") {
+                        let full_path_str = f.as_str();
+                        if state_clean_title.is_none() { state_clean_title = extract_clean_title(full_path_str); }
+                        state_final_filename = extract_filename_from_path(full_path_str);
+                        state_phase = "Downloading".to_string();
                         emit_update = true;
                     }
                 }
             }
 
             if emit_update {
-                // Update Native UI via Manager
+                // Update Native UI
                 {
                     let mut lock = manager.lock().unwrap();
                     lock.update_job_progress(job_id, state_percentage, &app_handle);
@@ -389,8 +481,8 @@ pub async fn run_download_process(
                 let _ = app_handle.emit_all("download-progress", DownloadProgressPayload {
                     job_id,
                     percentage: state_percentage,
-                    speed,
-                    eta,
+                    speed: speed_str,
+                    eta: eta_str,
                     filename: state_clean_title.clone(),
                     phase: Some(state_phase.clone()),
                 });
@@ -400,6 +492,7 @@ pub async fn run_download_process(
         let status = child.wait().await.expect("Child process encountered an error");
         release_network_slot(&manager, &app_handle, &mut network_slot_released);
 
+        // Cleanup Logic (Same as before)
         let mut manager_lock = manager.lock().unwrap();
         if let Some(job_status) = manager_lock.get_job_status(job_id) {
             if job_status == JobStatus::Cancelled {
