@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { Button } from './ui/Button';
 import { Card, CardContent } from './ui/Card';
-import { Download, FolderOpen, Link2, MonitorPlay, Headphones, FileText, Image as ImageIcon, AlertTriangle, Loader2 } from 'lucide-react';
+import { Download, FolderOpen, Link2, MonitorPlay, Headphones, FileText, Image as ImageIcon, AlertTriangle, Loader2, ChevronDown } from 'lucide-react';
 import { selectDirectory } from '@/api/invoke';
 import { DownloadFormatPreset, PreferenceConfig } from '@/types';
 import { useAppContext } from '@/contexts/AppContext';
@@ -231,11 +231,11 @@ export function DownloadForm({ onDownload }: DownloadFormProps) {
                  
                  <div className="space-y-3">
                      <div className="flex gap-3">
-                         <div className="flex-1">
+                         <div className="relative flex-1">
                             <select
                                 value={preferences.format_preset}
                                 onChange={(e) => handlePresetChange(e.target.value)}
-                                className="w-full bg-surfaceHighlight border border-border rounded-md px-3 py-2.5 text-sm text-zinc-300 focus:outline-none focus:ring-1 focus:ring-theme-cyan/50 focus:border-theme-cyan/50"
+                                className="w-full appearance-none bg-surfaceHighlight border border-border rounded-md pl-3 pr-10 py-2.5 text-sm text-zinc-300 focus:outline-none focus:ring-1 focus:ring-theme-cyan/50 focus:border-theme-cyan/50"
                             >
                                 {filteredPresets.map(p => (
                                     <option key={p.value} value={p.value}>
@@ -243,15 +243,16 @@ export function DownloadForm({ onDownload }: DownloadFormProps) {
                                     </option>
                                 ))}
                             </select>
+                            <ChevronDown className="absolute right-3 top-1/2 -translate-y-1/2 h-4 w-4 text-zinc-500 pointer-events-none" />
                          </div>
 
                          {/* Resolution Dropdown - Only show for Video */}
                          {currentMode === 'video' && (
-                             <div className="flex-1">
+                             <div className="relative flex-1">
                                 <select
                                     value={preferences.video_resolution}
                                     onChange={(e) => updatePreferences({ video_resolution: e.target.value })}
-                                    className="w-full bg-surfaceHighlight border border-border rounded-md px-3 py-2.5 text-sm text-zinc-300 focus:outline-none focus:ring-1 focus:ring-theme-cyan/50 focus:border-theme-cyan/50"
+                                    className="w-full appearance-none bg-surfaceHighlight border border-border rounded-md pl-3 pr-10 py-2.5 text-sm text-zinc-300 focus:outline-none focus:ring-1 focus:ring-theme-cyan/50 focus:border-theme-cyan/50"
                                 >
                                     {resolutionOptions.map(r => (
                                         <option key={r.value} value={r.value}>
@@ -259,6 +260,7 @@ export function DownloadForm({ onDownload }: DownloadFormProps) {
                                         </option>
                                     ))}
                                 </select>
+                                <ChevronDown className="absolute right-3 top-1/2 -translate-y-1/2 h-4 w-4 text-zinc-500 pointer-events-none" />
                              </div>
                          )}
                      </div>
