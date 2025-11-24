@@ -6,6 +6,7 @@ import { useDownloadManager } from './hooks/useDownloadManager';
 import { Layout } from './components/Layout';
 import { SplashWindow } from './components/SplashWindow';
 import { Activity, CheckCircle2, AlertCircle, List, Database, Hourglass, LayoutGrid, Trash2, RefreshCw } from 'lucide-react';
+import { twMerge } from 'tailwind-merge';
 
 function App() {
   const [windowLabel, setWindowLabel] = useState<string | null>(null);
@@ -148,8 +149,8 @@ function App() {
                         <div className="w-px h-8 bg-zinc-800" />
                         
                         {/* DONE Column with Clear Overlay */}
-                        <div className="group relative flex flex-col items-end cursor-pointer min-w-[40px]">
-                            <div className="flex flex-col items-end group-hover:opacity-0 transition-opacity duration-200">
+                        <div className={twMerge("relative flex flex-col items-end min-w-[40px]", completed > 0 ? "group cursor-pointer" : "")}>
+                            <div className={twMerge("flex flex-col items-end transition-opacity duration-200", completed > 0 && "group-hover:opacity-0")}>
                                 <span className="text-[10px] text-zinc-600 uppercase tracking-wider font-bold">Done</span>
                                 <div className="flex items-center gap-1.5 text-zinc-200 font-mono">
                                     <CheckCircle2 className="h-3 w-3 text-emerald-500" />
@@ -171,8 +172,8 @@ function App() {
                         <div className="w-px h-8 bg-zinc-800" />
                         
                         {/* FAILED Column with Retry Overlay */}
-                        <div className="group relative flex flex-col items-end cursor-pointer min-w-[40px]">
-                            <div className="flex flex-col items-end group-hover:opacity-0 transition-opacity duration-200">
+                        <div className={twMerge("relative flex flex-col items-end min-w-[40px]", failed > 0 ? "group cursor-pointer" : "")}>
+                            <div className={twMerge("flex flex-col items-end transition-opacity duration-200", failed > 0 && "group-hover:opacity-0")}>
                                 <span className="text-[10px] text-zinc-600 uppercase tracking-wider font-bold">Failed</span>
                                 <div className="flex items-center gap-1.5 text-zinc-200 font-mono">
                                     <AlertCircle className="h-3 w-3 text-theme-red" />
