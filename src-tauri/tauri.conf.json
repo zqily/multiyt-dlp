@@ -19,6 +19,9 @@
       "dialog": {
         "open": true
       },
+      "notification": {
+        "all": true
+      },
       "process": {
         "all": false,
         "exit": true,

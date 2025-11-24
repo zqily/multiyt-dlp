@@ -380,6 +380,12 @@ pub async fn run_download_process(
             }
 
             if emit_update {
+                // Update Native UI via Manager
+                {
+                    let mut lock = manager.lock().unwrap();
+                    lock.update_job_progress(job_id, state_percentage, &app_handle);
+                }
+
                 let _ = app_handle.emit_all("download-progress", DownloadProgressPayload {
                     job_id,
                     percentage: state_percentage,

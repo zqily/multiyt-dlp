@@ -6,6 +6,7 @@ use std::fs;
 use std::path::PathBuf;
 use crate::{models::{Job, JobStatus, QueuedJob}, core::error::AppError, config::ConfigManager};
 use crate::core::process::run_download_process;
+use crate::core::native;
 
 pub struct JobManager {
     // Runtime State
@@ -19,6 +20,9 @@ pub struct JobManager {
     // Concurrency Counters
     active_network_jobs: u32,
     active_process_instances: u32,
+
+    // Session Stats
+    completed_session_count: u32,
 }
 
 impl JobManager {
@@ -29,6 +33,7 @@ impl JobManager {
             persistence_registry: HashMap::new(),
             active_network_jobs: 0,
             active_process_instances: 0,
+            completed_session_count: 0,
         }
     }
 
@@ -61,6 +66,9 @@ impl JobManager {
         self.save_state();
 
         self.queue.push_back(job_data);
+
+        // Update UI (Taskbar should show something if new items added)
+        self.update_native_ui(&app_handle);
 
         // Attempt to start jobs immediately if slots are open
         self.process_queue(app_handle);
@@ -123,13 +131,21 @@ impl JobManager {
     pub fn notify_process_finished(&mut self, app_handle: AppHandle) {
         if self.active_process_instances > 0 {
             self.active_process_instances -= 1;
+            self.completed_session_count += 1;
+
             println!("Instance slot released. Total Instances: {}", self.active_process_instances);
             
-            self.process_queue(app_handle);
+            // Native UI Update: If we hit 0 instances, queue is done.
+            if self.active_process_instances == 0 {
+                self.trigger_finished_notification(&app_handle);
+            }
+
+            self.process_queue(app_handle.clone());
+            self.update_native_ui(&app_handle);
 
             // Auto-cleanup Temp Directory if completely idle AND queue is empty
             if self.active_process_instances == 0 && self.queue.is_empty() {
-                // Only clean if persistence is empty too (fully done)
+                // Only clean if persistence is empty too (fully done or cleared)
                 if self.persistence_registry.is_empty() {
                      self.clean_temp_directory();
                 }
@@ -191,5 +207,59 @@ impl JobManager {
         // Also remove from persistence and save
         self.persistence_registry.remove(&id);
         self.save_state();
+    }
+
+    // --- Native UI Logic ---
+
+    pub fn update_job_progress(&mut self, id: Uuid, progress: f32, app_handle: &AppHandle) {
+        if let Some(job) = self.jobs.get_mut(&id) {
+            job.progress = progress;
+        }
+        self.update_native_ui(app_handle);
+    }
+
+    fn update_native_ui(&self, app_handle: &AppHandle) {
+        let active_jobs: Vec<&Job> = self.jobs.values()
+            .filter(|j| j.status == JobStatus::Downloading || j.status == JobStatus::Pending)
+            .collect();
+        
+        let active_count = active_jobs.len();
+
+        if active_count == 0 {
+            native::clear_taskbar_progress(app_handle);
+            return;
+        }
+
+        let total_progress: f32 = active_jobs.iter().map(|j| j.progress).sum();
+        let aggregated = total_progress / (active_count as f32);
+        
+        // Check for any errors in the current batch to tint the bar red
+        let has_error = self.jobs.values().any(|j| j.status == JobStatus::Error);
+
+        // Run on main thread to be safe with OS calls
+        let app_for_thread = app_handle.clone(); // FIX: Clone dedicated handle for closure
+        
+        let _ = app_handle.run_on_main_thread(move || {
+            native::set_taskbar_progress(&app_for_thread, (aggregated / 100.0) as f64, has_error);
+        });
+    }
+
+    fn trigger_finished_notification(&mut self, app_handle: &AppHandle) {
+        use tauri::api::notification::Notification;
+
+        let count = self.completed_session_count;
+        if count == 0 { return; } // Don't notify if nothing happened
+
+        let title = "Downloads Finished";
+        let body = format!("Queue processed. {} files handled.", count);
+        
+        let _ = Notification::new(app_handle.config().tauri.bundle.identifier.clone())
+            .title(title)
+            .body(body)
+            .icon("icons/128x128.png") 
+            .show();
+
+        // Reset session count
+        self.completed_session_count = 0;
     }
 }

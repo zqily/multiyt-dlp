@@ -11,7 +11,7 @@ edition = "2021"
 tauri-build = { version = "1.5", features = [] }
 
 [dependencies]
-tauri = { version = "1.5", features = [ "window-all", "dialog-open", "process-exit", "process-relaunch", "shell-open", "process-command-api"] }
+tauri = { version = "1.5", features = [ "window-all", "dialog-open", "process-exit", "process-relaunch", "shell-open", "process-command-api", "notification-all"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 tokio = { version = "1.28", features = ["full"] }
@@ -36,6 +36,20 @@ async-trait = "0.1"
 
 [target.'cfg(not(windows))'.dependencies]
 nix = { version = "0.27", features = ["signal"] }
+
+# --- NATIVE UI DEPENDENCIES ---
+
+[target.'cfg(target_os = "windows")'.dependencies]
+windows = { version = "0.48", features = [
+    "Win32_Foundation",
+    "Win32_System_Com",
+    "Win32_UI_Shell",
+    "Win32_UI_WindowsAndMessaging"
+] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+cocoa = "0.24"
+objc = "0.2"
 
 [features]
 custom-protocol = ["tauri/custom-protocol"]

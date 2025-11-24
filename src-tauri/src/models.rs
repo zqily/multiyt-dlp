@@ -31,6 +31,7 @@ pub struct Job {
     pub url: String,
     pub pid: Option<u32>,
     pub status: JobStatus,
+    pub progress: f32, // Changed: Added progress field
     pub output_path: Option<String>,
 }
 
@@ -40,6 +41,7 @@ impl Job {
             url,
             pid: None,
             status: JobStatus::Pending,
+            progress: 0.0,
             output_path: None,
         }
     }
